@@ -4,3 +4,7 @@ pandas
 numpy
 plotly
 openai>=1.0.0
+streamlit
+google-generativeai>=0.8.0
+openai
+python-dotenv
