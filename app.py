@@ -1,35 +1,36 @@
 import streamlit as st
-import google.generativeai as genai
+from openai import OpenAI
 import os
 
-st.title("🧪 Gemini API App")
+st.title("🤖 OpenAI Helper")
 
-# 1. Load Gemini Key securely
+# 1. Load Key Securely
 try:
-    api_key = st.secrets["GEMINI_API_KEY"]
+    api_key = st.secrets["OPENAI_API_KEY"]
 except (FileNotFoundError, KeyError):
-    # Fallback for local testing if secrets.toml is missing
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = os.getenv("OPENAI_API_KEY")
 
 if not api_key:
-    st.error("❌ GEMINI_API_KEY not found. Please add it to Streamlit Secrets.")
+    st.error("❌ OPENAI_API_KEY not found. Please add it to Streamlit Secrets.")
     st.stop()
 
-# 2. Configure Gemini
-genai.configure(api_key=api_key)
+# 2. Configure OpenAI
+client = OpenAI(api_key=api_key)
 
-# 3. USE THE WORKING MODEL
-model_name = "models/gemini-2.5-flash"
-model = genai.GenerativeModel(model_name)
+# 3. App Logic
+user_input = st.text_input("What do you want to know?")
 
-st.success(f"✅ Connected to {model_name}")
-
-# 4. Input and Response
-user_input = st.text_input("Ask something:")
-if st.button("Generate"):
-    try:
-        with st.spinner("Thinking..."):
-            response = model.generate_content(user_input)
-            st.write(response.text)
-    except Exception as e:
-        st.error(f"Error: {e}")
+if st.button("Ask AI"):
+    if not user_input:
+        st.warning("Please type something first.")
+    else:
+        try:
+            with st.spinner("Thinking..."):
+                # We use 'gpt-4o-mini' because it is fast and cheap
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini", 
+                    messages=[{"role": "user", "content": user_input}]
+                )
+                st.write(response.choices[0].message.content)
+        except Exception as e:
+            st.error(f"Error: {e}")
