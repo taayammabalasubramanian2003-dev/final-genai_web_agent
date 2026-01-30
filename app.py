@@ -1,39 +1,4 @@
-import streamlit as st
-from openai import OpenAI
-import os
 
-st.title("🤖 OpenAI Helper")
-
-# 1. Load Key Securely
-try:
-    api_key = st.secrets["OPENAI_API_KEY"]
-except (FileNotFoundError, KeyError):
-    api_key = os.getenv("OPENAI_API_KEY")
-
-if not api_key:
-    st.error("❌ OPENAI_API_KEY not found. Please add it to Streamlit Secrets.")
-    st.stop()
-
-# 2. Configure OpenAI
-client = OpenAI(api_key=api_key)
-
-# 3. App Logic
-user_input = st.text_input("What do you want to know?")
-
-if st.button("Ask AI"):
-    if not user_input:
-        st.warning("Please type something first.")
-    else:
-        try:
-            with st.spinner("Thinking..."):
-                # We use 'gpt-4o-mini' because it is fast and cheap
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini", 
-                    messages=[{"role": "user", "content": user_input}]
-                )
-                st.write(response.choices[0].message.content)
-        except Exception as e:
-            st.error(f"Error: {e}")
 
 import streamlit as st
 from openai import OpenAI
