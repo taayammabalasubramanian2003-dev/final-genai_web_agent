@@ -1,72 +1,45 @@
+import streamlit as st
 import os
 from openai import OpenAI, AuthenticationError, RateLimitError
 
-# --- 1. SETUP YOUR KEY ---
-# Replace this string with your actual sk-... key if not using env variables
-# or set it in your terminal: export OPENAI_API_KEY="sk-..."
-api_key = "sk-YOUR_ACTUAL_KEY_HERE" 
+st.title("🕵️ OpenAI Key & Model Checker")
 
-# Better practice: Try to get from environment
-if os.getenv("OPENAI_API_KEY"):
-    api_key = os.getenv("OPENAI_API_KEY")
-
-print("--- 🕵️ OpenAI Model Access Checker ---\n")
-
-if api_key == "sk-YOUR_ACTUAL_KEY_HERE":
-    print("❌ Error: You didn't set your API Key in the code.")
-    exit()
-
+# 1. Try to get API Key from Streamlit Secrets or Input
 try:
+    api_key = st.secrets["OPENAI_API_KEY"]
+    st.success("✅ OpenAI API Key found in Secrets")
+except:
+    api_key = st.text_input("Enter OpenAI API Key (sk-...)", type="password")
+
+if st.button("Check OpenAI Key"):
+    if not api_key:
+        st.error("❌ Please enter a key or set it in secrets.")
+        st.stop()
+
     client = OpenAI(api_key=api_key)
-except Exception as e:
-    print(f"❌ Initialization Error: {e}")
-    exit()
+    
+    # Common models to test
+    models_to_test = [
+        "gpt-4o",
+        "gpt-4o-mini",
+        "gpt-4-turbo",
+        "gpt-3.5-turbo"
+    ]
 
-# --- 2. DEFINE MODELS TO TEST ---
-# These are the most common model names people need.
-# We test these specifically because listing ALL models returns 100+ junk items (like babbage, davinci, etc.)
-candidates = [
-    "gpt-4o",              # Newest, fastest Omni model
-    "gpt-4o-mini",         # Cheaper, fast Omni model
-    "gpt-4-turbo",         # Previous flagship
-    "gpt-4",               # Standard GPT-4
-    "gpt-3.5-turbo",       # Standard fast model
-    "gpt-3.5-turbo-16k",   # Larger context (legacy)
-]
-
-print(f"🔍 Testing {len(candidates)} common models with your key...\n")
-
-working_models = []
-
-for model_name in candidates:
-    print(f"Testing {model_name}...", end=" ")
-    try:
-        # We try a tiny request to see if it allows access
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "user", "content": "Hi"}],
-            max_tokens=5  # Keep it cheap
-        )
-        print("✅ WORKING")
-        working_models.append(model_name)
-        
-    except AuthenticationError:
-        print("❌ FAILED (Invalid API Key)")
-        break # No point testing others
-    except RateLimitError:
-        print("⚠️ FAILED (Quota Exceeded / Billing setup required)")
-    except Exception as e:
-        # Often "model_not_found" or "404"
-        if "does not exist" in str(e):
-            print("🚫 ACCESS DENIED (Not available on your plan)")
-        else:
-            print(f"❌ ERROR: {e}")
-
-# --- 3. SUMMARY ---
-print("\n" + "="*30)
-if working_models:
-    print("🚀 SUCCESS! Use one of these in your code:")
-    for m in working_models:
-        print(f'model="{m}"')
-else:
-    print("⚠️ No working models found. Check your OpenAI billing/credits.")
+    st.write("### 🔍 Testing Models...")
+    
+    for model in models_to_test:
+        try:
+            client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": "Hi"}],
+                max_tokens=1
+            )
+            st.success(f"✅ **{model}** is WORKING!")
+        except AuthenticationError:
+            st.error("❌ Invalid API Key")
+            break
+        except RateLimitError:
+            st.warning(f"⚠️ {model}: Quota Exceeded (Check Billing)")
+        except Exception as e:
+            st.warning(f"🚫 {model}: Access Denied or Error ({e})")
