@@ -107,17 +107,22 @@ def load_history(name):
 if "profile_created" not in st.session_state:
     st.session_state.profile_created = False
 
-st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to", [
-    "Home",
-    "Profile",
-    "Stock Analysis (Phase 2)",
-    "AI Decision (Phase 4)",
-    "Portfolio Allocation (Phase 3)",
-    "Financial Planning (Phase 5)",
-    "Education (Phase 6)",
-    "History / Memory (Phase 7)"
-])
+page = st.sidebar.radio(
+    "Go to",
+    [
+        "Home",
+        "Profile",
+        "Stock Analysis (Phase 2)",
+        "AI Decision (Phase 4)",
+        "Portfolio Allocation (Phase 3)",
+        "Financial Planning (Phase 5)",
+        "Education (Phase 6)",
+        "History / Memory (Phase 7)",
+        "News & Events (Phase 8)",
+        "Auto Rebalancer (Phase 9)"
+    ]
+)
+
 
 # =========================
 # HOME
