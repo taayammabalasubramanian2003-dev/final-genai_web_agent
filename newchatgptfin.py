@@ -108,19 +108,19 @@ st.sidebar.title("Navigation")
 page = st.sidebar.radio(
     "Go to",
     [
-        "Home",
-        "Profile",
-        "Stock Analysis (Phase 2)",
-        "AI Decision (Phase 4)",
-        "Portfolio Allocation (Phase 3)",
-        "Financial Planning (Phase 5)",
-        "Education (Phase 6)",
+        "Home", 
+        "Profile", 
+        "Stock Analysis (Phase 2)", 
+        "AI Decision (Phase 4)", 
+        "Portfolio Allocation (Phase 3)", 
+        "Financial Planning (Phase 5)", 
+        "Education (Phase 6)", 
         "History / Memory (Phase 7)",
         "News & Events (Phase 8)",
-        "Auto Rebalancer (Phase 9)"
+        "Auto Rebalancer (Phase 9)",
+        "Resume Explanation"
     ]
 )
-
 
 # =========================
 # PAGE: HOME
@@ -549,14 +549,6 @@ elif page == "History / Memory (Phase 7)":
                 st.write(ai_explain(prompt))
 
 # =========================
-# FOOTER
-# =========================
-st.sidebar.divider()
-st.sidebar.caption("Powered by OpenAI GPT-4o-mini & Yahoo Finance")
-
-
-
-# =========================
 # PHASE 8 — NEWS & EVENTS AGENT
 # =========================
 elif page == "News & Events (Phase 8)":
@@ -587,7 +579,6 @@ elif page == "News & Events (Phase 8)":
                     st.divider()
         except Exception as e:
             st.error(f"Error fetching news: {e}")
-
 
 # =========================
 # PHASE 9 — AUTO PORTFOLIO REBALANCER
@@ -631,7 +622,6 @@ elif page == "Auto Rebalancer (Phase 9)":
             st.success("✅ Rebalancing Advice")
             st.write(rebalance_advice)
 
-
 # =========================
 # RESUME / PLACEMENT EXPLANATION
 # =========================
@@ -641,8 +631,7 @@ elif page == "Resume Explanation":
     st.markdown("""
     ### 🤖 AI Investment Analyst Agent
 
-    **Description:**  
-    A multi-agent AI system that assists retail investors with stock analysis, 
+    **Description:** A multi-agent AI system that assists retail investors with stock analysis, 
     portfolio allocation, financial planning, and education.
 
     **Tech Stack:**
@@ -673,4 +662,10 @@ elif page == "Resume Explanation":
     - Financial education platforms
     - Robo-advisory prototypes
     """)
+
+# =========================
+# FOOTER
+# =========================
+st.sidebar.divider()
+st.sidebar.caption("Powered by OpenAI GPT-4o-mini & Yahoo Finance")
 
