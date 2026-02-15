@@ -31,13 +31,14 @@ client = OpenAI(api_key=api_key)
 MODEL_VERSION = "gpt-4o-mini"
 
 # =========================
-# 2. AGENT CLASSES (The Logic Layer)
+# 2. AGENT CLASSES
 # =========================
 
 class MemoryAgent:
     def __init__(self, api_key):
         self.pc = Pinecone(api_key=api_key)
         self.index_name = "financial-memory"
+        # Auto-create Index logic
         if self.index_name not in [i.name for i in self.pc.list_indexes()]:
             try:
                 self.pc.create_index(
@@ -100,7 +101,7 @@ class PlannerAgent:
 
 class ConversationalAgent:
     def chat(self, user_input, history, system_context=""):
-        messages = [{"role": "system", "content": f"You are FinBot. Context: {system_context}"}]
+        messages = [{"role": "system", "content": f"You are FinBot. Context: {system_context}. Be concise."}]
         for msg in history:
             if isinstance(msg["content"], str): messages.append(msg)
         messages.append({"role": "user", "content": user_input})
@@ -117,23 +118,33 @@ planner = PlannerAgent()
 tutor = ConversationalAgent()
 
 # =========================
-# 3. UI ORCHESTRATOR (Linear Flow)
+# 3. UI ORCHESTRATOR (Horizontal Layout)
 # =========================
 
 # Session State Init
-if "step" not in st.session_state: st.session_state.step = 1
+if "profile_created" not in st.session_state: st.session_state.profile_created = False
 if "profile" not in st.session_state: st.session_state.profile = None
 if "analysis" not in st.session_state: st.session_state.analysis = None
 if "portfolio" not in st.session_state: st.session_state.portfolio = None
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
 
 st.title("🚀 AI Investment Journey")
-st.markdown("Follow the steps below to build your personalized financial plan.")
 
-# --- STEP 1: PROFILE ---
-st.header("Step 1: Your Investor Profile")
-with st.container(border=True):
-    if st.session_state.step >= 1:
+# --- HORIZONTAL NAVIGATION TABS ---
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "👤 Profile", 
+    "📈 Stock Analysis", 
+    "💼 Portfolio Plan", 
+    "💬 AI Chatbot", 
+    "📊 Dashboard"
+])
+
+# =========================
+# TAB 1: PROFILE
+# =========================
+with tab1:
+    st.subheader("Step 1: Who are you?")
+    with st.container(border=True):
         c1, c2 = st.columns(2)
         with c1:
             name = st.text_input("Name", value="Investor")
@@ -142,136 +153,141 @@ with st.container(border=True):
             savings = st.number_input("Monthly Savings", value=10000)
             risk = st.slider("Risk Appetite (1=Safe, 20=Risky)", 1, 20, 10)
         
-        if st.button("Save Profile & Continue"):
+        if st.button("Save Profile"):
             st.session_state.profile = {"name": name, "risk": risk, "income": income, "savings": savings}
-            st.session_state.step = 2
-            st.rerun()
+            st.session_state.profile_created = True
+            st.success("✅ Profile Saved! You can now move to the 'Stock Analysis' tab.")
 
-    if st.session_state.step > 1:
-        st.success(f"✅ Profile Active: {st.session_state.profile['name']} (Risk: {st.session_state.profile['risk']}/20)")
-
-# --- STEP 2: STOCK ANALYSIS & DECISION ---
-if st.session_state.step >= 2:
-    st.divider()
-    st.header("Step 2: Market Analysis & Decision")
-    
-    with st.container(border=True):
+# =========================
+# TAB 2: STOCK ANALYSIS
+# =========================
+with tab2:
+    if not st.session_state.profile_created:
+        st.warning("🔒 Locked. Please save your Profile in the first tab.")
+    else:
+        st.subheader("Step 2: Market Analysis")
         col1, col2 = st.columns([1, 2])
+        
         with col1:
             symbol = st.text_input("Enter Stock Symbol", "RELIANCE.NS")
-            mode = st.radio("Mode", ["Investor (Long Term)", "Trader (Short Term)"])
-            
             if st.button("Analyze Stock"):
                 with st.spinner("Agents Analyzing..."):
                     data = analyst.analyze(symbol)
                     if data:
                         st.session_state.analysis = data
                         memory.memorize(f"Analyzed {symbol} at {data['price']}", {"type": "analysis"})
-                        st.session_state.step = 3 # Unlock next step
                     else:
                         st.error("Symbol not found.")
 
         with col2:
             if st.session_state.analysis:
                 d = st.session_state.analysis
-                # Display Analysis
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Price", f"₹{d['price']}")
-                c2.metric("Trend", d['trend'])
-                c3.metric("RSI", d['rsi'])
+                # Metrics Row
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Price", f"₹{d['price']}")
+                m2.metric("Trend", d['trend'])
+                m3.metric("RSI", d['rsi'])
+                
                 st.line_chart(d['history_df']['Close'])
                 
-                # AI DECISION LOGIC
+                # Verdict
                 rec = "BUY" if d['trend'] == "BULLISH" and d['rsi'] < 70 else "HOLD"
                 color = "green" if rec == "BUY" else "orange"
                 st.markdown(f"### 🧠 AI Verdict: :{color}[{rec}]")
-                st.caption(f"Reasoning: The trend is {d['trend']} and RSI indicates {d['rsi']} (Momentum).")
+                st.success("Analysis Complete! You can now check the 'Portfolio Plan' tab.")
 
-# --- STEP 3: PORTFOLIO ALLOCATION ---
-if st.session_state.step >= 3:
-    st.divider()
-    st.header("Step 3: Portfolio Strategy")
-    
-    with st.container(border=True):
+# =========================
+# TAB 3: PORTFOLIO
+# =========================
+with tab3:
+    if not st.session_state.analysis:
+        st.warning("🔒 Locked. Please Analyze a stock first.")
+    else:
+        st.subheader("Step 3: Strategic Allocation")
         capital = st.number_input("Investment Capital (₹)", 10000, 10000000, 100000)
         
-        if st.button("Generate Allocation Plan"):
+        if st.button("Generate Strategy"):
             sent = analyst.get_sentiment()
             risk = st.session_state.profile['risk']
             alloc = planner.create_allocation(risk, sent)
             st.session_state.portfolio = {"alloc": alloc, "sentiment": sent, "capital": capital}
-            st.session_state.step = 4 # Unlock next step
             
         if st.session_state.portfolio:
             p = st.session_state.portfolio
-            st.info(f"Market Sentiment: **{p['sentiment']}** | Strategy: **Dynamic Rebalancing**")
+            st.info(f"Based on **{p['sentiment']}** Market & **Risk Level {st.session_state.profile['risk']}**")
             
             c1, c2 = st.columns([1, 1])
             with c1:
-                st.write("#### Recommended Split")
+                st.write("#### Asset Split")
                 st.json(p['alloc'])
             with c2:
                 fig = go.Figure(data=[go.Pie(labels=list(p['alloc'].keys()), values=list(p['alloc'].values()))])
                 st.plotly_chart(fig, use_container_width=True)
 
-# --- STEP 4: CHATBOT TUTOR ---
-if st.session_state.step >= 4:
-    st.divider()
-    st.header("Step 4: Ask the Expert (Chat)")
+# =========================
+# TAB 4: CHATBOT (Enhanced)
+# =========================
+with tab4:
+    if not st.session_state.portfolio:
+        st.warning("🔒 Recommend generating a portfolio plan first for better context.")
     
-    with st.container(border=True):
-        # Context building
-        ctx = f"User: {st.session_state.profile['name']}. "
-        if st.session_state.analysis:
-            ctx += f"Looking at {st.session_state.analysis['symbol']}. "
-        if st.session_state.portfolio:
-            ctx += f"Portfolio Plan: {st.session_state.portfolio['alloc']}. "
-            
-        # Chat Interface
+    st.subheader("💬 AI Financial Tutor")
+    
+    # Context Construction
+    ctx = ""
+    if st.session_state.profile: ctx += f"User: {st.session_state.profile['name']}. "
+    if st.session_state.analysis: ctx += f"Stock: {st.session_state.analysis['symbol']} ({st.session_state.analysis['trend']}). "
+    if st.session_state.portfolio: ctx += f"Plan: {st.session_state.portfolio['alloc']}. "
+
+    # Chat UI
+    chat_container = st.container(height=400)
+    with chat_container:
         for msg in st.session_state.chat_history:
             with st.chat_message(msg["role"]):
                 st.write(msg["content"])
-        
-        prompt = st.chat_input("Ask a question about your plan or stocks...")
-        if prompt:
-            st.session_state.chat_history.append({"role": "user", "content": prompt})
-            with st.chat_message("user"): st.write(prompt)
-            
-            with st.chat_message("assistant"):
-                with st.spinner("Thinking..."):
-                    resp = tutor.chat(prompt, st.session_state.chat_history, system_context=ctx)
-                    st.write(resp)
-            st.session_state.chat_history.append({"role": "assistant", "content": resp})
 
-# --- STEP 5: FINAL DASHBOARD ---
-if st.session_state.step >= 4:
-    st.divider()
-    st.header("🏁 Session Dashboard")
-    st.markdown("Summary of your investment journey today.")
+    # Quick Suggestion Chips
+    st.write("pop-up questions:")
+    b1, b2, b3 = st.columns(3)
+    if b1.button("Why is the trend Bullish?"):
+        prompt = "Why is the trend Bullish?"
+    elif b2.button("Explain RSI simply"):
+        prompt = "Explain RSI simply"
+    elif b3.button("Is my portfolio safe?"):
+        prompt = "Is my portfolio safe?"
+    else:
+        prompt = st.chat_input("Type your question here...")
+
+    if prompt:
+        st.session_state.chat_history.append({"role": "user", "content": prompt})
+        with st.chat_message("user"): st.write(prompt)
+        
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                resp = tutor.chat(prompt, st.session_state.chat_history, system_context=ctx)
+                st.write(resp)
+        st.session_state.chat_history.append({"role": "assistant", "content": resp})
+        st.rerun()
+
+# =========================
+# TAB 5: DASHBOARD
+# =========================
+with tab5:
+    st.subheader("🏁 Session Summary")
     
-    c1, c2, c3 = st.columns(3)
-    
-    with c1:
-        st.subheader("👤 You")
-        st.write(f"**Name:** {st.session_state.profile['name']}")
-        st.write(f"**Risk Profile:** {st.session_state.profile['risk']}/20")
-    
-    with c2:
-        st.subheader("📉 Market")
-        if st.session_state.analysis:
-            st.write(f"**Focus Stock:** {st.session_state.analysis['symbol']}")
-            st.write(f"**Trend:** {st.session_state.analysis['trend']}")
-        else:
-            st.write("No stock analyzed.")
+    if st.session_state.profile:
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("👤 Investor", st.session_state.profile['name'])
+        with c2:
+            val = st.session_state.analysis['symbol'] if st.session_state.analysis else "N/A"
+            st.metric("📉 Last Stock", val)
+        with c3:
+            val = f"₹{st.session_state.portfolio['capital']}" if st.session_state.portfolio else "N/A"
+            st.metric("💰 Planned Capital", val)
             
-    with c3:
-        st.subheader("💰 Strategy")
-        if st.session_state.portfolio:
-            st.write(f"**Capital:** ₹{st.session_state.portfolio['capital']}")
-            st.write(f"**Equity Allocation:** {st.session_state.portfolio['alloc']['Equity']}%")
-        else:
-            st.write("No plan generated.")
-            
-    if st.button("💾 Save Session to Memory"):
-        memory.memorize(f"Session Summary for {st.session_state.profile['name']}", {"type": "session_summary"})
-        st.success("Session saved to Pinecone Vector Database!")
+        if st.button("💾 Save Full Session to Memory"):
+            memory.memorize(f"Session for {st.session_state.profile['name']}", {"type": "session"})
+            st.success("Session Saved!")
+    else:
+        st.info("Start by creating a profile in Tab 1.")
