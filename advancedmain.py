@@ -51,13 +51,13 @@ class MemoryAgent:
         self.pc = Pinecone(api_key=api_key)
         self.index_name = "financial-memory"
         
-        # Auto-create Index logic
+        # Auto-create Index logic (Updated to 1024 to match your setup)
         existing_indexes = [i.name for i in self.pc.list_indexes()]
         if self.index_name not in existing_indexes:
             try:
                 self.pc.create_index(
                     name=self.index_name,
-                    dimension=1536,
+                    dimension=1024, # FIXED: Changed to 1024 to match your index
                     metric='cosine',
                     spec=ServerlessSpec(cloud='aws', region='us-east-1')
                 )
@@ -69,12 +69,19 @@ class MemoryAgent:
 
     def memorize(self, text, metadata):
         try:
-            response = client.embeddings.create(input=text, model="text-embedding-3-small")
+            # FIXED: Request 1024 dimensions explicitly
+            response = client.embeddings.create(
+                input=text, 
+                model="text-embedding-3-small",
+                dimensions=1024 
+            )
             vector = response.data[0].embedding
             unique_id = f"mem_{int(time.time())}"
+            
             # Clean metadata to simple strings
             clean_meta = {k: str(v) for k, v in metadata.items() if v is not None}
             clean_meta['text'] = text
+            
             self.index.upsert(vectors=[(unique_id, vector, clean_meta)])
             return True
         except Exception as e:
@@ -83,7 +90,12 @@ class MemoryAgent:
 
     def recall(self, query, top_k=3):
         try:
-            response = client.embeddings.create(input=query, model="text-embedding-3-small")
+            # FIXED: Request 1024 dimensions explicitly
+            response = client.embeddings.create(
+                input=query, 
+                model="text-embedding-3-small",
+                dimensions=1024
+            )
             query_vector = response.data[0].embedding
             results = self.index.query(vector=query_vector, top_k=top_k, include_metadata=True)
             return [match['metadata'] for match in results['matches']]
@@ -222,21 +234,14 @@ if page == "Home":
 # --- PROFILE ---
 elif page == "Profile Setup":
     st.header("👤 Profile Agent")
-    with st.form("profile_form"):
-        name_input = st.text_input("Name", value=st.session_state.profile.get("name", "Investor"))
-        risk_input = st.slider("Risk Appetite", 1, 20, st.session_state.profile.get("risk", 10))
-        income_input = st.number_input("Monthly Income", value=st.session_state.profile.get("income", 50000))
-        savings_input = st.number_input("Monthly Savings", value=st.session_state.profile.get("savings", 10000))
-        
+    with st.form("profile"):
+        name = st.text_input("Name", value=st.session_state.profile.get("name", "Investor"))
+        risk = st.slider("Risk Appetite", 1, 20, 10)
+        income = st.number_input("Monthly Income", value=50000)
+        savings = st.number_input("Monthly Savings", value=10000)
         if st.form_submit_button("Save Profile"):
-            # Update session state with new values
-            st.session_state.profile = {
-                "name": name_input, 
-                "risk": risk_input, 
-                "income": income_input, 
-                "savings": savings_input
-            }
-            st.success("Profile updated successfully.")
+            st.session_state.profile = {"name": name, "risk": risk, "income": income, "savings": savings}
+            st.success("Profile updated.")
 
 # --- STOCK ANALYSIS ---
 elif page == "Stock Analysis":
