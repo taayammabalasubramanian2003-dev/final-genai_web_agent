@@ -3,13 +3,14 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
 import os
 import datetime
 import time
 import base64
-from pypdf import PdfReader  # NEW: For PDF Analysis
+from pypdf import PdfReader
 
 # =========================
 # 1. SYSTEM CONFIGURATION
@@ -35,18 +36,16 @@ MODEL_VERSION = "gpt-4o-mini"
 # 2. HELPER FUNCTIONS
 # =========================
 def encode_image(uploaded_file):
-    """Converts image to Base64 for Vision API"""
     if uploaded_file is not None:
         return base64.b64encode(uploaded_file.getvalue()).decode('utf-8')
     return None
 
 def extract_text_from_pdf(uploaded_file):
-    """Extracts text from uploaded PDF for RAG"""
     if uploaded_file is not None:
         try:
             reader = PdfReader(uploaded_file)
             text = ""
-            for page in reader.pages[:5]: # Limit to first 5 pages to save tokens
+            for page in reader.pages[:5]:
                 text += page.extract_text()
             return text
         except: return None
@@ -57,16 +56,14 @@ def extract_text_from_pdf(uploaded_file):
 # =========================
 
 class MemoryAgent:
-    """🧠 THE BRAIN: Pinecone Vector Database"""
     def __init__(self, api_key):
         self.pc = Pinecone(api_key=api_key)
         self.index_name = "financial-memory"
-        # Auto-heal index
         if self.index_name not in [i.name for i in self.pc.list_indexes()]:
             try:
                 self.pc.create_index(
                     name=self.index_name,
-                    dimension=1024, # Optimized for text-embedding-3-small
+                    dimension=1024,
                     metric='cosine',
                     spec=ServerlessSpec(cloud='aws', region='us-east-1')
                 )
@@ -75,7 +72,6 @@ class MemoryAgent:
         self.index = self.pc.Index(self.index_name)
 
     def memorize(self, text, metadata):
-        """Saves context to Long-Term Memory"""
         try:
             response = client.embeddings.create(input=text, model="text-embedding-3-small", dimensions=1024)
             vector = response.data[0].embedding
@@ -87,7 +83,6 @@ class MemoryAgent:
         except: return False
 
     def recall(self, query, top_k=3):
-        """Retrieves relevant past info"""
         try:
             response = client.embeddings.create(input=query, model="text-embedding-3-small", dimensions=1024)
             vector = response.data[0].embedding
@@ -96,40 +91,74 @@ class MemoryAgent:
         except: return []
 
 class AnalystAgent:
-    """📊 THE QUANT: Market Data & Technicals"""
+    """📊 THE QUANT: Advanced Technicals with Charts & Reasoning"""
     def analyze(self, symbol):
         try:
             stock = yf.Ticker(symbol)
             df = stock.history(period="1y")
             if df.empty: return None
             
-            # Indicators
+            # 1. Calc Indicators
             df["MA50"] = df["Close"].rolling(50).mean()
-            curr = df["Close"].iloc[-1]
-            trend = "BULLISH" if curr > df["MA50"].iloc[-1] else "BEARISH"
+            df["MA200"] = df["Close"].rolling(200).mean()
             
+            curr = df["Close"].iloc[-1]
+            ma50 = df["MA50"].iloc[-1]
+            ma200 = df["MA200"].iloc[-1]
+            
+            # RSI Calc
             delta = df["Close"].diff()
             gain = delta.clip(lower=0)
             loss = -delta.clip(upper=0)
             rs = gain.rolling(14).mean() / loss.rolling(14).mean()
-            rsi = 100 - (100 / (1 + rs))
+            df["RSI"] = 100 - (100 / (1 + rs))
+            rsi = df["RSI"].iloc[-1]
+            
+            # 2. Logic & Reasoning Engine
+            signals = []
+            
+            # Trend Logic
+            if curr > ma50:
+                trend = "BULLISH"
+                signals.append("✅ Price is above 50-Day MA (Short-term Bullish).")
+            else:
+                trend = "BEARISH"
+                signals.append("❌ Price is below 50-Day MA (Short-term Bearish).")
+                
+            if ma50 > ma200:
+                signals.append("✅ Golden Cross active (50 MA > 200 MA).")
+            
+            # Momentum Logic
+            if rsi < 30:
+                signals.append("🟢 RSI is Oversold (<30). Potential reversal buy.")
+                verdict = "STRONG BUY"
+            elif rsi > 70:
+                signals.append("🔴 RSI is Overbought (>70). Potential pullback.")
+                verdict = "SELL/WAIT"
+            else:
+                signals.append("⚪ RSI is Neutral.")
+                verdict = "BUY" if trend == "BULLISH" else "HOLD"
+
+            reasoning = " ".join(signals)
             
             return {
-                "symbol": symbol, "price": round(curr, 2),
-                "trend": trend, "rsi": round(rsi.iloc[-1], 2),
+                "symbol": symbol, 
+                "price": round(curr, 2),
+                "trend": trend, 
+                "rsi": round(rsi, 2),
+                "verdict": verdict,
+                "reasoning": reasoning,
                 "history_df": df
             }
         except: return None
 
     def get_sentiment(self):
         try:
-            # Simple heuristic using Nifty 50
             hist = yf.Ticker("^NSEI").history(period="5d")
             return "BULLISH" if hist["Close"].iloc[-1] > hist["Close"].iloc[0] else "BEARISH"
         except: return "NEUTRAL"
 
 class PlannerAgent:
-    """⚖️ THE STRATEGIST: Risk & Allocation"""
     def create_allocation(self, risk, sentiment):
         if sentiment == "BEARISH": return {"Equity": 30, "Debt": 50, "Gold": 20}
         if risk >= 15: return {"Equity": 70, "Debt": 20, "Gold": 10}
@@ -137,44 +166,20 @@ class PlannerAgent:
         return {"Equity": 30, "Debt": 50, "Gold": 20}
 
 class ConversationalAgent:
-    """🎓 THE TUTOR: Multi-Modal (Text + Vision + PDF)"""
     def chat(self, user_input, history, image_base64=None, pdf_text=None, system_context=""):
-        
-        # Dynamic System Prompt
         sys_msg = f"""
-        You are FinBot, an advanced AI Financial Analyst.
-        SYSTEM CONTEXT: {system_context}
-        
-        CAPABILITIES:
-        1. Analyze Charts (if image provided).
-        2. Analyze Annual Reports/Documents (if PDF text provided).
-        3. Answer general financial questions.
-        
-        INSTRUCTIONS:
-        - Be concise and professional.
-        - If a PDF is uploaded, answer based on that specific text.
+        You are FinBot. CONTEXT: {system_context}
+        Analyze charts/PDFs if provided. Be concise.
         """
-        
         messages = [{"role": "system", "content": sys_msg}]
-        
-        # Add Conversation History (Text Only)
         for msg in history:
             if isinstance(msg["content"], str): messages.append(msg)
         
-        # Build User Message Payload
         content_payload = [{"type": "text", "text": user_input}]
-        
         if image_base64:
-            content_payload.append({
-                "type": "image_url", 
-                "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}
-            })
-        
+            content_payload.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}})
         if pdf_text:
-            content_payload.append({
-                "type": "text", 
-                "text": f"\n\n[ATTACHED DOCUMENT CONTENT]: {pdf_text[:4000]}..." # Truncate for limits
-            })
+            content_payload.append({"type": "text", "text": f"\n\n[DOC]: {pdf_text[:4000]}..."})
 
         messages.append({"role": "user", "content": content_payload})
         
@@ -193,7 +198,6 @@ tutor = ConversationalAgent()
 # 4. UI ORCHESTRATOR
 # =========================
 
-# State Init
 if "profile_created" not in st.session_state: st.session_state.profile_created = False
 if "profile" not in st.session_state: st.session_state.profile = None
 if "analysis" not in st.session_state: st.session_state.analysis = None
@@ -202,9 +206,8 @@ if "chat_history" not in st.session_state: st.session_state.chat_history = []
 
 st.title("🚀 AI Financial Super App")
 
-# --- HORIZONTAL TABS ---
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "👤 Profile", "📈 Market", "💼 Strategy", "💬 AI Lab", "📊 Dashboard"
+    "👤 Profile", "📈 Market Analyst", "💼 Strategy", "💬 AI Lab", "📊 Dashboard"
 ])
 
 # === TAB 1: PROFILE ===
@@ -222,43 +225,80 @@ with tab1:
         if st.button("Initialize Profile"):
             st.session_state.profile = {"name": name, "risk": risk, "income": income}
             st.session_state.profile_created = True
-            st.success("Identity Verified. Access granted to Market Layer.")
+            st.success("Identity Verified.")
 
-# === TAB 2: MARKET ANALYST ===
+# === TAB 2: MARKET ANALYST (IMPROVED) ===
 with tab2:
     if not st.session_state.profile_created:
         st.warning("Please complete Profile first.")
     else:
         st.subheader("Market Intelligence Layer")
-        c1, c2 = st.columns([1, 2])
+        
+        # Search Bar
+        c1, c2 = st.columns([1, 3])
         with c1:
             sym = st.text_input("Stock Symbol", "RELIANCE.NS")
-            if st.button("Run Analysis Protocol"):
+            if st.button("Run Deep Analysis"):
                 with st.spinner("Analyst Agent working..."):
                     data = analyst.analyze(sym)
                     if data:
                         st.session_state.analysis = data
-                        memory.memorize(f"Analyzed {sym} at {data['price']}", {"type": "analysis"})
+                        memory.memorize(f"Analyzed {sym}. Verdict: {data['verdict']}", {"type": "analysis"})
                     else: st.error("Symbol not found")
         
+        # Results Display
         with c2:
             if st.session_state.analysis:
                 d = st.session_state.analysis
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Price", f"₹{d['price']}")
-                m2.metric("Trend", d['trend'])
-                m3.metric("RSI", d['rsi'])
-                st.line_chart(d['history_df']['Close'])
                 
-                rec = "BUY" if d['trend'] == "BULLISH" and d['rsi'] < 70 else "HOLD"
-                st.info(f"**AI Verdict:** {rec} (Based on Trend + Momentum)")
+                # 1. High Level Metrics
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Current Price", f"₹{d['price']}")
+                m2.metric("RSI (Momentum)", d['rsi'])
+                m3.metric("Trend", d['trend'])
+                
+                # Verdict Color
+                v_color = "green" if "BUY" in d['verdict'] else "red"
+                m4.markdown(f"**Verdict:** :{v_color}[{d['verdict']}]")
+                
+                # 2. Reasoning Box
+                st.info(f"**💡 Analyst Reasoning:** {d['reasoning']}")
+
+                # 3. Advanced Charts (Plotly)
+                tab_chart1, tab_chart2 = st.tabs(["🕯️ Technical Chart", "📉 Momentum (RSI)"])
+                
+                with tab_chart1:
+                    # Candlestick + MA
+                    fig = go.Figure()
+                    fig.add_trace(go.Candlestick(x=d['history_df'].index,
+                                    open=d['history_df']['Open'], high=d['history_df']['High'],
+                                    low=d['history_df']['Low'], close=d['history_df']['Close'], name='Price'))
+                    
+                    fig.add_trace(go.Scatter(x=d['history_df'].index, y=d['history_df']['MA50'], 
+                                             line=dict(color='blue', width=1), name='50 Day MA'))
+                    fig.add_trace(go.Scatter(x=d['history_df'].index, y=d['history_df']['MA200'], 
+                                             line=dict(color='orange', width=1), name='200 Day MA'))
+                    
+                    fig.update_layout(height=400, margin=dict(l=0, r=0, t=0, b=0))
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with tab_chart2:
+                    # RSI Chart
+                    fig_rsi = go.Figure()
+                    fig_rsi.add_trace(go.Scatter(x=d['history_df'].index, y=d['history_df']['RSI'], 
+                                                 line=dict(color='purple', width=2), name='RSI'))
+                    # Overbought/Oversold lines
+                    fig_rsi.add_hline(y=70, line_dash="dash", line_color="red")
+                    fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
+                    fig_rsi.update_layout(height=300, margin=dict(l=0, r=0, t=0, b=0))
+                    st.plotly_chart(fig_rsi, use_container_width=True)
 
 # === TAB 3: STRATEGY ===
 with tab3:
     if not st.session_state.analysis:
         st.warning("Analyze a stock first.")
     else:
-        st.subheader("Strategic Planning Layer")
+        st.subheader("Strategic Planning")
         cap = st.number_input("Deployment Capital", 100000)
         if st.button("Generate Allocation"):
             sent = analyst.get_sentiment()
@@ -268,53 +308,43 @@ with tab3:
         
         if st.session_state.portfolio:
             p = st.session_state.portfolio
-            st.write(f"**Market Context:** {p['sent']}")
             c1, c2 = st.columns(2)
             with c1: st.json(p['alloc'])
             with c2: 
                 fig = go.Figure(data=[go.Pie(labels=list(p['alloc'].keys()), values=list(p['alloc'].values()))])
                 st.plotly_chart(fig, use_container_width=True)
 
-# === TAB 4: AI LAB (CHAT + VISION + PDF) ===
+# === TAB 4: AI LAB ===
 with tab4:
-    st.subheader("💬 Conversational Intelligence (Multi-Modal)")
-    
-    # Context Injection
+    st.subheader("💬 AI Lab (Multi-Modal)")
     ctx = ""
     if st.session_state.profile: ctx += f"User: {st.session_state.profile['name']}. "
-    if st.session_state.analysis: ctx += f"Focus Stock: {st.session_state.analysis['symbol']}. "
+    if st.session_state.analysis: ctx += f"Stock: {st.session_state.analysis['symbol']}. "
     
-    # 1. File Uploads (Sidebar within Tab)
-    with st.expander("📂 Upload Data (Charts or Reports)", expanded=True):
+    with st.expander("📂 Data Upload", expanded=True):
         uc1, uc2 = st.columns(2)
         with uc1:
-            img_file = st.file_uploader("Upload Chart (Image)", type=['png', 'jpg'])
+            img_file = st.file_uploader("Upload Chart", type=['png', 'jpg'])
             img_b64 = encode_image(img_file) if img_file else None
         with uc2:
-            pdf_file = st.file_uploader("Upload Report (PDF)", type=['pdf'])
+            pdf_file = st.file_uploader("Upload Report", type=['pdf'])
             pdf_txt = extract_text_from_pdf(pdf_file) if pdf_file else None
-            if pdf_txt: st.success("PDF Content Extracted!")
+            if pdf_txt: st.success("PDF Extracted!")
 
-    # 2. Chat Interface
     chat_container = st.container(height=400)
     for msg in st.session_state.chat_history:
         with chat_container.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    # 3. Input Area
-    user_q = st.chat_input("Ask about markets, your plan, or uploaded files...")
-    
+    user_q = st.chat_input("Ask FinBot...")
     if user_q:
-        # User Msg
         st.session_state.chat_history.append({"role": "user", "content": user_q})
         with chat_container.chat_message("user"): st.write(user_q)
         
-        # AI Msg
         with chat_container.chat_message("assistant"):
-            with st.spinner("Processing (Vision + Text)..."):
+            with st.spinner("Processing..."):
                 reply = tutor.chat(user_q, st.session_state.chat_history, img_b64, pdf_txt, ctx)
                 st.write(reply)
-        
         st.session_state.chat_history.append({"role": "assistant", "content": reply})
 
 # === TAB 5: DASHBOARD ===
@@ -327,9 +357,8 @@ with tab5:
         c3.metric("Plan Value", f"₹{st.session_state.portfolio['cap']}" if st.session_state.portfolio else "0")
         
         st.divider()
-        st.write("### 🧠 Long-Term Memory Logs (Pinecone)")
         if st.button("Sync Memory"):
             logs = memory.recall("investment", 5)
             for l in logs: st.info(l)
     else:
-        st.info("System Idle. Start at Tab 1.")
+        st.info("System Idle.")
