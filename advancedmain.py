@@ -90,51 +90,62 @@ class MemoryAgent:
         except: return []
 
 class AnalystAgent:
-    """📊 THE QUANT: Returns MACD, RSI, and Trend"""
+    """📊 THE QUANT: Deep Technical & Fundamental Analysis"""
     def analyze(self, symbol):
         try:
             stock = yf.Ticker(symbol)
             df = stock.history(period="1y")
             if df.empty: return None
             
-            # Indicators
+            # --- Technicals ---
             df["MA50"] = df["Close"].rolling(50).mean()
+            df["MA200"] = df["Close"].rolling(200).mean()
             curr = df["Close"].iloc[-1]
             trend = "BULLISH" if curr > df["MA50"].iloc[-1] else "BEARISH"
             
-            # RSI
             delta = df["Close"].diff()
             gain = delta.clip(lower=0)
             loss = -delta.clip(upper=0)
             rs = gain.rolling(14).mean() / loss.rolling(14).mean()
             rsi = 100 - (100 / (1 + rs))
-            rsi_val = rsi.iloc[-1]
-
+            
             # MACD
             ema12 = df["Close"].ewm(span=12).mean()
             ema26 = df["Close"].ewm(span=26).mean()
             macd = ema12 - ema26
             signal = macd.ewm(span=9).mean()
-            macd_val = macd.iloc[-1]
-            signal_val = signal.iloc[-1]
             
+            # --- Fundamentals ---
+            info = stock.info
+            fundamentals = {
+                "Sector": info.get("sector", "N/A"),
+                "Industry": info.get("industry", "N/A"),
+                "MarketCap": info.get("marketCap", 0),
+                "PE_Ratio": info.get("trailingPE", 0),
+                "EPS": info.get("trailingEps", 0),
+                "52WeekHigh": info.get("fiftyTwoWeekHigh", 0),
+                "52WeekLow": info.get("fiftyTwoWeekLow", 0)
+            }
+
             # Verdict Logic
             verdict = "HOLD"
-            if trend == "BULLISH" and rsi_val < 70 and macd_val > signal_val:
+            if trend == "BULLISH" and rsi.iloc[-1] < 70:
                 verdict = "BUY"
-            elif trend == "BEARISH" or rsi_val > 70:
+            elif trend == "BEARISH" or rsi.iloc[-1] > 70:
                 verdict = "SELL"
 
             return {
                 "symbol": symbol, 
                 "price": round(curr, 2),
                 "trend": trend, 
-                "rsi": round(rsi_val, 2),
-                "macd": round(macd_val, 2),
+                "rsi": round(rsi.iloc[-1], 2),
+                "macd": round(macd.iloc[-1], 2),
                 "verdict": verdict,
+                "fundamentals": fundamentals,
                 "history_df": df
             }
-        except: return None
+        except Exception as e:
+            return None
 
     def get_sentiment(self):
         try:
@@ -143,6 +154,25 @@ class AnalystAgent:
         except: return "NEUTRAL"
 
 class PlannerAgent:
+    """⚖️ THE STRATEGIST: Risk-Adjusted Recommendations"""
+    
+    def recommend_assets(self, risk_score):
+        """Returns specific companies based on Risk Profile (1-20)"""
+        if risk_score <= 7: # Conservative
+            equity = ["HDFC Bank", "ITC", "HUL"]
+            debt = ["HDFC Liquid Fund", "SBI Gilt Fund", "ICICI Pru Savings"]
+            gold = ["Nippon Gold BeES", "SBI Gold ETF", "HDFC Gold ETF"]
+        elif risk_score <= 14: # Moderate
+            equity = ["Reliance Industries", "Infosys", "L&T"]
+            debt = ["Aditya Birla Corporate Bond", "Kotak Bond", "Axis Strategic Bond"]
+            gold = ["Sovereign Gold Bond", "Kotak Gold ETF", "Axis Gold ETF"]
+        else: # Aggressive
+            equity = ["Adani Enterprises", "Tata Motors", "Zomato"]
+            debt = ["Credit Risk Funds", "Dynamic Bond Funds", "Hybrid Funds"]
+            gold = ["Digital Gold", "Gold Futures", "Quant Gold Fund"]
+            
+        return {"Equity": equity, "Debt": debt, "Gold": gold}
+
     def create_allocation(self, risk, sentiment):
         if sentiment == "BEARISH": 
             alloc = {"Equity": 30, "Debt": 50, "Gold": 20}
@@ -158,12 +188,10 @@ class ConversationalAgent:
     def chat(self, user_input, history, image_base64=None, pdf_text=None, system_context=""):
         sys_msg = f"""
         You are FinBot. CONTEXT: {system_context}
-        
         INSTRUCTIONS:
-        1. Answer the user's question clearly.
-        2. At the very end of your response, ALWAYS suggest 3 short follow-up questions.
+        1. Answer clearly.
+        2. Suggest 3 short follow-up questions at the end.
         """
-        
         messages = [{"role": "system", "content": sys_msg}]
         for msg in history:
             if isinstance(msg["content"], str): messages.append(msg)
@@ -175,11 +203,10 @@ class ConversationalAgent:
             content_payload.append({"type": "text", "text": f"\n\n[DOC]: {pdf_text[:4000]}..."})
 
         messages.append({"role": "user", "content": content_payload})
-        
         try:
             res = client.chat.completions.create(model=MODEL_VERSION, messages=messages, max_tokens=700)
             return res.choices[0].message.content
-        except Exception as e: return f"AI Error: {e}"
+        except: return "AI currently offline."
 
 # --- Initialize ---
 memory = MemoryAgent(pc_key)
@@ -191,17 +218,19 @@ tutor = ConversationalAgent()
 # 4. UI ORCHESTRATOR
 # =========================
 
+# --- SESSION STATE ---
 if "profile_created" not in st.session_state: st.session_state.profile_created = False
 if "profile" not in st.session_state: st.session_state.profile = {}
-if "analysis" not in st.session_state: st.session_state.analysis = None
-if "portfolio" not in st.session_state: st.session_state.portfolio = None
-if "sip_plan" not in st.session_state: st.session_state.sip_plan = None
+if "activity_log" not in st.session_state: st.session_state.activity_log = [] # Stores history of actions
+if "current_analysis" not in st.session_state: st.session_state.current_analysis = None
+if "current_portfolio" not in st.session_state: st.session_state.current_portfolio = None
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
 
 st.title("🚀 AI Financial Super App")
 
+# --- NAVIGATION ---
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "👤 Profile", "📈 Market", "💼 Strategy", "🔮 SIP Planner", "💬 AI Lab", "📊 Dashboard"
+    "👤 Profile", "📈 Deep Analysis", "💼 Portfolio Plan", "🔮 SIP Planner", "💬 AI Lab", "📊 Dashboard"
 ])
 
 # === TAB 1: PROFILE ===
@@ -211,18 +240,18 @@ with tab1:
         c1, c2 = st.columns(2)
         with c1:
             name = st.text_input("Name", "Investor")
-            age = st.number_input("Age", 18, 100, 25)
-            mode = st.selectbox("Trading Mode", ["Investor (Long Term)", "Trader (Short Term)"])
+            age = st.number_input("Age", 25)
+            mode = st.selectbox("Mode", ["Investor", "Trader"])
         with c2:
-            income = st.number_input("Monthly Income", value=50000)
-            risk = st.slider("Risk Tolerance (1-20)", 1, 20, 10)
+            income = st.number_input("Income", 50000)
+            risk = st.slider("Risk (1-20)", 1, 20, 10)
         
         if st.button("Save Profile"):
             st.session_state.profile = {"name": name, "age": age, "mode": mode, "risk": risk}
             st.session_state.profile_created = True
             st.success("Profile Secured.")
 
-# === TAB 2: MARKET ANALYST ===
+# === TAB 2: DEEP ANALYSIS ===
 with tab2:
     if not st.session_state.profile_created:
         st.warning("Complete Profile first.")
@@ -230,56 +259,99 @@ with tab2:
         st.subheader("Market Intelligence")
         col1, col2 = st.columns([1, 3])
         with col1:
-            sym = st.text_input("Stock Symbol", "RELIANCE.NS")
-            if st.button("Run Analysis"):
+            sym = st.text_input("Symbol", "RELIANCE.NS")
+            if st.button("Analyze"):
                 with st.spinner("Analyzing..."):
-                    # CLEAR OLD DATA to avoid crashes
-                    st.session_state.analysis = None 
                     data = analyst.analyze(sym)
                     if data:
-                        st.session_state.analysis = data
+                        st.session_state.current_analysis = data
+                        # Log to History
+                        entry = {
+                            "time": datetime.datetime.now().strftime("%H:%M:%S"),
+                            "type": "Analysis",
+                            "item": sym,
+                            "detail": f"Verdict: {data['verdict']} @ {data['price']}"
+                        }
+                        st.session_state.activity_log.append(entry)
                         memory.memorize(f"Analyzed {sym}. Verdict: {data['verdict']}", {"type": "analysis"})
                     else: st.error("Symbol not found")
         
         with col2:
-            if st.session_state.analysis:
-                d = st.session_state.analysis
-                # Metrics (Using .get() for crash prevention)
+            if st.session_state.current_analysis:
+                d = st.session_state.current_analysis
+                f = d['fundamentals']
+                
+                # Metrics Row 1
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Price", f"₹{d.get('price', 0)}")
-                m2.metric("RSI", d.get('rsi', 0))
-                m3.metric("MACD", d.get('macd', 'N/A')) # FIXED LINE
+                m1.metric("Price", f"₹{d.get('price',0)}")
+                m2.metric("RSI", d.get('rsi',0))
+                m3.metric("MACD", d.get('macd','N/A'))
+                color = "green" if d['verdict'] == "BUY" else "red"
+                m4.markdown(f"### :{color}[{d['verdict']}]")
                 
-                verdict = d.get('verdict', 'HOLD')
-                v_color = "green" if verdict == "BUY" else "red"
-                m4.markdown(f"### :{v_color}[{verdict}]")
+                # Fundamentals Expandable
+                with st.expander("📚 Fundamental Data (Deep Dive)", expanded=True):
+                    f1, f2, f3, f4 = st.columns(4)
+                    f1.metric("Sector", f['Sector'])
+                    f2.metric("P/E Ratio", f['PE_Ratio'])
+                    f3.metric("Market Cap", f"{f['MarketCap']/1e9:.2f}B")
+                    f4.metric("52W High", f['52WeekHigh'])
                 
-                # Candlestick Chart
+                # Chart
                 fig = go.Figure(data=[go.Candlestick(x=d['history_df'].index,
                                 open=d['history_df']['Open'], high=d['history_df']['High'],
                                 low=d['history_df']['Low'], close=d['history_df']['Close'])])
                 st.plotly_chart(fig, use_container_width=True)
 
-# === TAB 3: STRATEGY ===
+# === TAB 3: PORTFOLIO & SUGGESTIONS ===
 with tab3:
-    if not st.session_state.analysis:
+    if not st.session_state.current_analysis:
         st.warning("Analyze a stock first.")
     else:
-        st.subheader("Portfolio Allocation")
+        st.subheader("Strategic Planning")
         cap = st.number_input("Capital (₹)", 100000)
-        if st.button("Generate Plan"):
+        
+        if st.button("Generate Strategy"):
             sent = analyst.get_sentiment()
             risk = st.session_state.profile['risk']
+            
+            # Get Allocation %
             alloc = planner.create_allocation(risk, sent)
-            st.session_state.portfolio = {"alloc": alloc, "cap": cap, "sent": sent}
+            # Get Specific Companies
+            recs = planner.recommend_assets(risk)
+            
+            st.session_state.current_portfolio = {"alloc": alloc, "recs": recs, "cap": cap}
+            
+            # Log to History
+            st.session_state.activity_log.append({
+                "time": datetime.datetime.now().strftime("%H:%M:%S"),
+                "type": "Portfolio",
+                "item": f"Risk Level {risk}",
+                "detail": f"Equity: {alloc['Equity']}%"
+            })
         
-        if st.session_state.portfolio:
-            p = st.session_state.portfolio
-            c1, c2 = st.columns(2)
-            with c1: st.json(p['alloc'])
-            with c2: 
+        if st.session_state.current_portfolio:
+            p = st.session_state.current_portfolio
+            
+            # Allocation Chart
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                st.write("#### Asset Split")
+                st.json(p['alloc'])
+            with c2:
                 fig = go.Figure(data=[go.Pie(labels=list(p['alloc'].keys()), values=list(p['alloc'].values()))])
                 st.plotly_chart(fig, use_container_width=True)
+            
+            st.divider()
+            st.subheader("🏆 Recommended Assets (Based on Risk)")
+            
+            r1, r2, r3 = st.columns(3)
+            with r1:
+                st.info(f"**Equity Picks**\n" + "\n".join([f"- {x}" for x in p['recs']['Equity']]))
+            with r2:
+                st.warning(f"**Debt/Bond Picks**\n" + "\n".join([f"- {x}" for x in p['recs']['Debt']]))
+            with r3:
+                st.success(f"**Gold Options**\n" + "\n".join([f"- {x}" for x in p['recs']['Gold']]))
 
 # === TAB 4: SIP PLANNER ===
 with tab4:
@@ -288,27 +360,19 @@ with tab4:
     with s1:
         sip_amt = st.number_input("Monthly SIP", 5000)
         sip_yrs = st.slider("Duration (Years)", 1, 30, 10)
-    
     future = sip_amt * (((1+0.12/12)**(sip_yrs*12)-1)/(0.12/12))
-    
-    if st.button("Save SIP Plan"):
-        st.session_state.sip_plan = {"amount": sip_amt, "years": sip_yrs, "future_val": round(future, 2)}
-        st.success("Plan Saved!")
-    
     st.metric("Projected Wealth (12%)", f"₹{future:,.0f}")
     st.area_chart([sip_amt * (((1+0.12/12)**m-1)/(0.12/12)) for m in range(1, sip_yrs*12+1)])
 
 # === TAB 5: AI LAB ===
 with tab5:
     st.subheader("💬 AI Lab")
-    ctx = ""
-    if st.session_state.profile: ctx += f"User: {st.session_state.profile.get('name')}. "
-    if st.session_state.analysis: ctx += f"Stock: {st.session_state.analysis.get('symbol')}. "
+    ctx = f"User: {st.session_state.profile.get('name')}."
     
     with st.expander("Uploads"):
-        img_file = st.file_uploader("Chart", type=['png', 'jpg'])
+        img_file = st.file_uploader("Chart Image", type=['png', 'jpg'])
         img_b64 = encode_image(img_file) if img_file else None
-        pdf_file = st.file_uploader("Report", type=['pdf'])
+        pdf_file = st.file_uploader("Report PDF", type=['pdf'])
         pdf_txt = extract_text_from_pdf(pdf_file) if pdf_file else None
 
     chat_box = st.container(height=400)
@@ -327,56 +391,37 @@ with tab5:
                 st.write(reply)
         st.session_state.chat_history.append({"role": "assistant", "content": reply})
 
-# === TAB 6: DASHBOARD ===
+# === TAB 6: ACTIVITY DASHBOARD (TIMELINE) ===
 with tab6:
-    st.subheader("🏁 Master Dashboard")
+    st.subheader("🏁 Session Timeline")
     
+    # 1. Profile Summary
     if st.session_state.profile:
-        # ROW 1: PROFILE
         with st.container(border=True):
-            st.markdown("### 👤 User Profile")
+            st.markdown("### 👤 User Identity")
             p = st.session_state.profile
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Name", p.get('name'))
-            c2.metric("Age", p.get('age'))
-            c3.metric("Mode", p.get('mode'))
-            c4.metric("Risk Score", f"{p.get('risk')}/20")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Name", p['name'])
+            c2.metric("Risk Score", f"{p['risk']}/20")
+            c3.metric("Mode", p['mode'])
 
-        # ROW 2: MARKET DATA
-        if st.session_state.analysis:
-            with st.container(border=True):
-                st.markdown("### 📉 Market Analysis")
-                d = st.session_state.analysis
-                k1, k2, k3, k4, k5 = st.columns(5)
-                k1.metric("Stock", d.get('symbol'))
-                k2.metric("Price", f"₹{d.get('price')}")
-                k3.metric("RSI", d.get('rsi'))
-                k4.metric("MACD", d.get('macd', 'N/A'))
-                
-                verd = d.get('verdict', 'N/A')
-                color = "green" if verd == "BUY" else "red"
-                k5.markdown(f"**Rec:** :{color}[{verd}]")
-        
-        # ROW 3: STRATEGY
-        c_left, c_right = st.columns(2)
-        with c_left:
-            with st.container(border=True):
-                st.markdown("### 💼 Portfolio Strategy")
-                if st.session_state.portfolio:
-                    plan = st.session_state.portfolio
-                    st.write(f"**Capital:** ₹{plan['cap']}")
-                    st.json(plan['alloc'])
-                else: st.caption("No portfolio generated.")
-
-        with c_right:
-            with st.container(border=True):
-                st.markdown("### 🔮 SIP Wealth Plan")
-                if st.session_state.sip_plan:
-                    sip = st.session_state.sip_plan
-                    st.metric("Monthly Investment", f"₹{sip['amount']}")
-                    st.metric("Duration", f"{sip['years']} Years")
-                    st.metric("Projected Value", f"₹{sip['future_val']:,.0f}")
-                else: st.caption("No SIP plan saved.")
-            
+    st.divider()
+    
+    # 2. Activity Log (Timeline)
+    st.markdown("### 📜 Activity History (Use 1, Use 2...)")
+    
+    if len(st.session_state.activity_log) == 0:
+        st.info("No activity yet. Analyze a stock to start tracking.")
     else:
-        st.info("Start at Tab 1 to populate the Dashboard.")
+        # Loop through log in reverse to show newest first
+        for i, log in enumerate(reversed(st.session_state.activity_log)):
+            with st.container(border=True):
+                c_time, c_type, c_desc = st.columns([1, 1, 4])
+                c_time.caption(f"⏰ {log['time']}")
+                c_type.markdown(f"**{log['type']}**")
+                c_desc.write(f"{log['item']} - {log['detail']}")
+    
+    st.divider()
+    if st.button("Save Full Timeline to Memory"):
+        memory.memorize(f"Timeline for {st.session_state.profile.get('name')}", {"type": "timeline"})
+        st.success("History Saved!")
