@@ -144,7 +144,6 @@ class AnalystAgent:
 
 class PlannerAgent:
     def create_allocation(self, risk, sentiment):
-        # FIX: Syntax error resolved here
         if sentiment == "BEARISH": 
             alloc = {"Equity": 30, "Debt": 50, "Gold": 20}
         elif risk >= 15: 
@@ -162,12 +161,7 @@ class ConversationalAgent:
         
         INSTRUCTIONS:
         1. Answer the user's question clearly.
-        2. At the very end of your response, ALWAYS suggest 3 short follow-up questions the user might want to ask next. Format them like this:
-           
-           *Follow-up Suggestions:*
-           1. [Question 1]
-           2. [Question 2]
-           3. [Question 3]
+        2. At the very end of your response, ALWAYS suggest 3 short follow-up questions.
         """
         
         messages = [{"role": "system", "content": sys_msg}]
@@ -197,7 +191,6 @@ tutor = ConversationalAgent()
 # 4. UI ORCHESTRATOR
 # =========================
 
-# State Management
 if "profile_created" not in st.session_state: st.session_state.profile_created = False
 if "profile" not in st.session_state: st.session_state.profile = {}
 if "analysis" not in st.session_state: st.session_state.analysis = None
@@ -240,7 +233,8 @@ with tab2:
             sym = st.text_input("Stock Symbol", "RELIANCE.NS")
             if st.button("Run Analysis"):
                 with st.spinner("Analyzing..."):
-                    st.session_state.analysis = None # Reset
+                    # CLEAR OLD DATA to avoid crashes
+                    st.session_state.analysis = None 
                     data = analyst.analyze(sym)
                     if data:
                         st.session_state.analysis = data
@@ -250,14 +244,15 @@ with tab2:
         with col2:
             if st.session_state.analysis:
                 d = st.session_state.analysis
-                # Metrics
+                # Metrics (Using .get() for crash prevention)
                 m1, m2, m3, m4 = st.columns(4)
-                m1.metric("Price", f"₹{d['price']}")
-                m2.metric("RSI", d['rsi'])
-                m3.metric("MACD", d['macd'])
+                m1.metric("Price", f"₹{d.get('price', 0)}")
+                m2.metric("RSI", d.get('rsi', 0))
+                m3.metric("MACD", d.get('macd', 'N/A')) # FIXED LINE
                 
-                v_color = "green" if d['verdict'] == "BUY" else "red"
-                m4.markdown(f"### :{v_color}[{d['verdict']}]")
+                verdict = d.get('verdict', 'HOLD')
+                v_color = "green" if verdict == "BUY" else "red"
+                m4.markdown(f"### :{v_color}[{verdict}]")
                 
                 # Candlestick Chart
                 fig = go.Figure(data=[go.Candlestick(x=d['history_df'].index,
@@ -286,20 +281,19 @@ with tab3:
                 fig = go.Figure(data=[go.Pie(labels=list(p['alloc'].keys()), values=list(p['alloc'].values()))])
                 st.plotly_chart(fig, use_container_width=True)
 
-# === TAB 4: SIP PLANNER (New) ===
+# === TAB 4: SIP PLANNER ===
 with tab4:
-    st.subheader("Wealth Builder (SIP)")
+    st.subheader("Wealth Builder")
     s1, s2 = st.columns(2)
     with s1:
         sip_amt = st.number_input("Monthly SIP", 5000)
         sip_yrs = st.slider("Duration (Years)", 1, 30, 10)
     
-    # Calculate
     future = sip_amt * (((1+0.12/12)**(sip_yrs*12)-1)/(0.12/12))
     
     if st.button("Save SIP Plan"):
         st.session_state.sip_plan = {"amount": sip_amt, "years": sip_yrs, "future_val": round(future, 2)}
-        st.success("SIP Plan Saved to Dashboard!")
+        st.success("Plan Saved!")
     
     st.metric("Projected Wealth (12%)", f"₹{future:,.0f}")
     st.area_chart([sip_amt * (((1+0.12/12)**m-1)/(0.12/12)) for m in range(1, sip_yrs*12+1)])
@@ -308,14 +302,13 @@ with tab4:
 with tab5:
     st.subheader("💬 AI Lab")
     ctx = ""
-    if st.session_state.profile: ctx += f"User: {st.session_state.profile['name']}. "
-    if st.session_state.analysis: ctx += f"Stock: {st.session_state.analysis['symbol']} ({st.session_state.analysis['verdict']}). "
+    if st.session_state.profile: ctx += f"User: {st.session_state.profile.get('name')}. "
+    if st.session_state.analysis: ctx += f"Stock: {st.session_state.analysis.get('symbol')}. "
     
     with st.expander("Uploads"):
-        img_file = st.file_uploader("Chart Image", type=['png', 'jpg'])
+        img_file = st.file_uploader("Chart", type=['png', 'jpg'])
         img_b64 = encode_image(img_file) if img_file else None
-        
-        pdf_file = st.file_uploader("Report PDF", type=['pdf'])
+        pdf_file = st.file_uploader("Report", type=['pdf'])
         pdf_txt = extract_text_from_pdf(pdf_file) if pdf_file else None
 
     chat_box = st.container(height=400)
@@ -334,7 +327,7 @@ with tab5:
                 st.write(reply)
         st.session_state.chat_history.append({"role": "assistant", "content": reply})
 
-# === TAB 6: DASHBOARD (Requested Update) ===
+# === TAB 6: DASHBOARD ===
 with tab6:
     st.subheader("🏁 Master Dashboard")
     
@@ -344,10 +337,10 @@ with tab6:
             st.markdown("### 👤 User Profile")
             p = st.session_state.profile
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Name", p['name'])
-            c2.metric("Age", p['age'])
-            c3.metric("Mode", p['mode'])
-            c4.metric("Risk Score", f"{p['risk']}/20")
+            c1.metric("Name", p.get('name'))
+            c2.metric("Age", p.get('age'))
+            c3.metric("Mode", p.get('mode'))
+            c4.metric("Risk Score", f"{p.get('risk')}/20")
 
         # ROW 2: MARKET DATA
         if st.session_state.analysis:
@@ -355,17 +348,17 @@ with tab6:
                 st.markdown("### 📉 Market Analysis")
                 d = st.session_state.analysis
                 k1, k2, k3, k4, k5 = st.columns(5)
-                k1.metric("Stock", d['symbol'])
-                k2.metric("Price", f"₹{d['price']}")
-                k3.metric("RSI", d['rsi'])
-                k4.metric("MACD", d['macd'])
+                k1.metric("Stock", d.get('symbol'))
+                k2.metric("Price", f"₹{d.get('price')}")
+                k3.metric("RSI", d.get('rsi'))
+                k4.metric("MACD", d.get('macd', 'N/A'))
                 
-                color = "green" if d['verdict'] == "BUY" else "red"
-                k5.markdown(f"**Rec:** :{color}[{d['verdict']}]")
+                verd = d.get('verdict', 'N/A')
+                color = "green" if verd == "BUY" else "red"
+                k5.markdown(f"**Rec:** :{color}[{verd}]")
         
-        # ROW 3: STRATEGY & WEALTH
+        # ROW 3: STRATEGY
         c_left, c_right = st.columns(2)
-        
         with c_left:
             with st.container(border=True):
                 st.markdown("### 💼 Portfolio Strategy")
@@ -373,8 +366,7 @@ with tab6:
                     plan = st.session_state.portfolio
                     st.write(f"**Capital:** ₹{plan['cap']}")
                     st.json(plan['alloc'])
-                else:
-                    st.caption("No portfolio generated.")
+                else: st.caption("No portfolio generated.")
 
         with c_right:
             with st.container(border=True):
@@ -384,13 +376,7 @@ with tab6:
                     st.metric("Monthly Investment", f"₹{sip['amount']}")
                     st.metric("Duration", f"{sip['years']} Years")
                     st.metric("Projected Value", f"₹{sip['future_val']:,.0f}")
-                else:
-                    st.caption("No SIP plan saved.")
-
-        st.divider()
-        if st.button("Sync Dashboard to Memory"):
-            memory.memorize(f"Dashboard Snapshot for {st.session_state.profile['name']}", {"type": "dashboard"})
-            st.success("Snapshot saved to Pinecone.")
+                else: st.caption("No SIP plan saved.")
             
     else:
         st.info("Start at Tab 1 to populate the Dashboard.")
