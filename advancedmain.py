@@ -11,439 +11,355 @@ import time
 import json
 
 # =========================
-# 1. SYSTEM CONFIGURATION & SETUP
+# 1. ORCHESTRATOR CONFIGURATION
 # =========================
-st.set_page_config(page_title="AI Investment Analyst (Advanced)", layout="wide", page_icon="📈")
+st.set_page_config(page_title="AI Investment Hive (Multi-Agent)", layout="wide", page_icon="🧠")
 
-# --- Load API Keys ---
+# Load Secrets
 try:
-    # Try getting from Streamlit secrets (Cloud deployment)
     api_key = st.secrets["OPENAI_API_KEY"]
     pc_key = st.secrets["PINECONE_API_KEY"]
 except:
-    # Fallback to environment variables (Local testing)
-    api_key = os.getenv("OPENAI_API_KEY")
-    pc_key = os.getenv("PINECONE_API_KEY")
-
-if not api_key or not pc_key:
-    st.error("❌ Missing Keys! Please set OPENAI_API_KEY and PINECONE_API_KEY in Streamlit Secrets.")
+    st.error("❌ Secrets not found! Please set OPENAI_API_KEY and PINECONE_API_KEY.")
     st.stop()
 
-# Initialize Clients
 client = OpenAI(api_key=api_key)
-MODEL_VERSION = "gpt-4o-mini"
 
 # =========================
-# 2. THE MULTI-AGENT BACKEND (Classes)
+# 2. AGENT DEFINITIONS (The "Workers")
 # =========================
 
 class MemoryAgent:
     """
-    The Brain: Handles Long-Term Vector Memory (Pinecone) & Short-Term Context
+    🧠 THE BRAIN: Manages Long-Term Vector Memory (Pinecone)
+    Role: Stores experiences and retrieves relevant context for other agents.
     """
-    def __init__(self, api_key, index_name="financial-memory"):
+    def __init__(self, api_key):
         self.pc = Pinecone(api_key=api_key)
-        self.index_name = index_name
+        self.index_name = "financial-memory"
         
-        # Auto-create index if missing
-        existing_indexes = [i.name for i in self.pc.list_indexes()]
-        if index_name not in existing_indexes:
+        # Auto-create Index if it doesn't exist
+        if self.index_name not in [i.name for i in self.pc.list_indexes()]:
             try:
                 self.pc.create_index(
-                    name=index_name,
-                    dimension=1536, # OpenAI embedding size
+                    name=self.index_name,
+                    dimension=1536, # Must match OpenAI embedding
                     metric='cosine',
                     spec=ServerlessSpec(cloud='aws', region='us-east-1')
                 )
-                time.sleep(2) # Allow initialization
+                time.sleep(10) # Wait for initialization
             except Exception as e:
-                st.warning(f"Memory initialization note: {e}")
+                st.error(f"Memory Agent Initialization Failed: {e}")
+        
+        self.index = self.pc.Index(self.index_name)
 
-        self.index = self.pc.Index(index_name)
-
-    def get_embedding(self, text):
-        response = client.embeddings.create(input=text, model="text-embedding-3-small")
-        return response.data[0].embedding
-
-    def store_memory(self, user_name, text, metadata):
-        """Saves portfolio/analysis to Vector DB"""
+    def memorize(self, text, metadata):
+        """Encodes and saves an event"""
         try:
-            vector = self.get_embedding(text)
-            id = f"{user_name}_{int(time.time())}"
-            # Ensure metadata is flat and string-based for safety
-            clean_meta = {k: str(v) for k, v in metadata.items() if v is not None}
-            clean_meta["text"] = text
-            clean_meta["user"] = user_name
-            self.index.upsert(vectors=[(id, vector, clean_meta)])
+            # 1. Convert text to vector
+            response = client.embeddings.create(input=text, model="text-embedding-3-small")
+            vector = response.data[0].embedding
+            
+            # 2. Generate ID
+            unique_id = f"mem_{int(time.time())}"
+            
+            # 3. Clean Metadata
+            clean_meta = {k: str(v) for k, v in metadata.items()}
+            clean_meta['text'] = text
+            
+            # 4. Upsert
+            self.index.upsert(vectors=[(unique_id, vector, clean_meta)])
             return True
         except Exception as e:
             st.error(f"Memory Error: {e}")
             return False
 
-    def retrieve_memory(self, user_name, query, top_k=5):
-        """Retrieves relevant past history"""
+    def recall(self, query, top_k=3):
+        """Retrieves similar past events"""
         try:
-            vector = self.get_embedding(query)
+            # 1. Convert query to vector
+            response = client.embeddings.create(input=query, model="text-embedding-3-small")
+            query_vector = response.data[0].embedding
+            
+            # 2. Search Pinecone
             results = self.index.query(
-                vector=vector,
+                vector=query_vector,
                 top_k=top_k,
-                include_metadata=True,
-                filter={"user": user_name}
+                include_metadata=True
             )
-            # Return list of dictionaries for tabular display
-            return [
-                {
-                    "Date": datetime.datetime.fromtimestamp(int(match['id'].split('_')[1])).strftime('%Y-%m-%d'),
-                    "Summary": match['metadata']['text'],
-                    "Type": match['metadata'].get('type', 'General')
-                } 
-                for match in results['matches']
-            ]
-        except:
+            
+            # 3. Format Output
+            return [match['metadata'] for match in results['matches']]
+        except Exception as e:
+            st.error(f"Recall Error: {e}")
             return []
 
 class AnalystAgent:
     """
-    The Quant: Handles Technical Analysis & Data Fetching
+    📊 THE QUANT: Handles Technical & Fundamental Data
+    Role: Fetches live data, calculates indicators, and detects trends.
     """
-    def analyze_stock(self, symbol, period, interval):
+    def analyze(self, symbol):
         try:
             stock = yf.Ticker(symbol)
-            df = stock.history(period=period, interval=interval)
+            df = stock.history(period="1y")
             
-            if df.empty: return None, None
+            if df.empty: return None
 
-            df.reset_index(inplace=True)
-            
-            # --- Technical Calculations ---
-            # Moving Averages
-            df["MA20"] = df["Close"].rolling(20).mean()
+            # Technical Indicators
             df["MA50"] = df["Close"].rolling(50).mean()
+            current_price = df["Close"].iloc[-1]
+            trend = "BULLISH" if current_price > df["MA50"].iloc[-1] else "BEARISH"
             
-            # Trend
-            trend = "BULLISH" if df["MA20"].iloc[-1] > df["MA50"].iloc[-1] else "BEARISH"
-            
-            # RSI
+            # RSI Calculation
             delta = df["Close"].diff()
-            gain = delta.clip(lower=0)
-            loss = -delta.clip(upper=0)
-            rs = gain.rolling(14).mean() / loss.rolling(14).mean()
-            df["RSI"] = 100 - (100 / (1 + rs))
-            rsi_val = df["RSI"].iloc[-1]
+            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+            rs = gain / loss
+            rsi = 100 - (100 / (1 + rs))
             
-            # MACD
-            ema12 = df["Close"].ewm(span=12, adjust=False).mean()
-            ema26 = df["Close"].ewm(span=26, adjust=False).mean()
-            df["MACD"] = ema12 - ema26
-            df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
-            macd_signal = "BULLISH" if df["MACD"].iloc[-1] > df["Signal"].iloc[-1] else "BEARISH"
+            # MACD Calculation
+            ema12 = df["Close"].ewm(span=12).mean()
+            ema26 = df["Close"].ewm(span=26).mean()
+            macd = ema12 - ema26
+            signal = macd.ewm(span=9).mean()
+            macd_sig = "BUY" if macd.iloc[-1] > signal.iloc[-1] else "SELL"
 
-            # Fundamental Snapshot
+            # Fundamental Data
             info = stock.get_info()
-            fundamentals = {
-                "Sector": info.get("sector", "N/A"),
-                "PE": info.get("trailingPE", "N/A"),
-                "EPS": info.get("trailingEps", "N/A"),
-                "MarketCap": info.get("marketCap", "N/A")
-            }
-
-            results = {
+            
+            return {
                 "symbol": symbol,
-                "price": df["Close"].iloc[-1],
+                "price": round(current_price, 2),
                 "trend": trend,
-                "rsi": rsi_val,
-                "macd_signal": macd_signal,
-                "fundamentals": fundamentals
+                "rsi": round(rsi.iloc[-1], 2),
+                "macd": macd_sig,
+                "pe_ratio": info.get('trailingPE', 'N/A'),
+                "sector": info.get('sector', 'Unknown'),
+                "history_df": df
             }
-            return df, results
-        except Exception as e:
-            return None, str(e)
+        except: return None
 
-    def get_market_sentiment(self):
-        """Checks Nifty 50 for Global Sentiment"""
+    def check_market_sentiment(self):
+        """Checks Nifty 50 for global sentiment"""
         try:
             nifty = yf.Ticker("^NSEI")
             hist = nifty.history(period="5d")
-            if hist.empty: return "NEUTRAL"
-            change = ((hist["Close"].iloc[-1] - hist["Close"].iloc[0]) / hist["Close"].iloc[0]) * 100
-            if change > 1.5: return "BULLISH"
-            elif change < -1.5: return "BEARISH"
-            else: return "NEUTRAL"
+            change = (hist["Close"].iloc[-1] - hist["Close"].iloc[0])
+            return "BULLISH" if change > 0 else "BEARISH"
         except: return "NEUTRAL"
+
+class PlannerAgent:
+    """
+    ⚖️ THE STRATEGIST: Manages Risk & Allocation
+    Role: Decides how to split money based on rules and sentiment.
+    """
+    def create_allocation(self, risk_level, market_sentiment):
+        # Logic: If market is bad, be defensive (Gold/Debt). If good, be aggressive (Equity).
+        if market_sentiment == "BEARISH":
+            return {"Equity": 30, "Debt": 50, "Gold": 20}
+        
+        # Risk-based logic
+        if risk_level >= 15: # High Risk
+            return {"Equity": 70, "Debt": 20, "Gold": 10}
+        elif risk_level >= 8: # Moderate
+            return {"Equity": 50, "Debt": 30, "Gold": 20}
+        else: # Conservative
+            return {"Equity": 30, "Debt": 50, "Gold": 20}
 
 class AdvisorAgent:
     """
-    The Communicator: Generates explanations using LLM
+    💬 THE COMMUNICATOR: Synthesis & Explanation
+    Role: Uses LLM to explain the findings of other agents to the user.
     """
-    def generate_response(self, system_role, user_prompt):
-        try:
-            response = client.chat.completions.create(
-                model=MODEL_VERSION,
-                messages=[
-                    {"role": "system", "content": system_role},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=400
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            return f"⚠️ AI Error: {e}"
+    def explain(self, context, question):
+        prompt = f"""
+        You are a Senior Financial Advisor Agent. 
+        Analyze the data provided by the Analyst and Planner agents.
+        
+        CONTEXT FROM AGENTS:
+        {context}
+        
+        USER QUESTION:
+        {question}
+        
+        Provide a concise, professional answer (max 3 sentences).
+        """
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content
 
-# --- Instantiate Agents ---
-memory_agent = MemoryAgent(pc_key)
-analyst_agent = AnalystAgent()
-advisor_agent = AdvisorAgent()
+# --- Initialize The Hive ---
+memory_node = MemoryAgent(pc_key)
+analyst_node = AnalystAgent()
+planner_node = PlannerAgent()
+advisor_node = AdvisorAgent()
 
 # =========================
-# 3. SESSION STATE MANAGEMENT
-# =========================
-if "profile_created" not in st.session_state: st.session_state.profile_created = False
-if "chat_history" not in st.session_state: st.session_state.chat_history = [] # For Education Chatbot
-
-# =========================
-# 4. FRONTEND UI (Streamlit)
+# 3. FRONTEND ORCHESTRATOR (UI)
 # =========================
 
-st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to", [
-    "Home", 
-    "Profile", 
-    "Stock Analysis (Phase 2)", 
-    "AI Decision (Phase 4)", 
-    "Portfolio Allocation (Phase 3)", 
-    "Financial Planning (Phase 5)", 
-    "Education (Phase 6)", 
-    "History / Memory (Phase 7)"
+# Session State
+if "profile" not in st.session_state: st.session_state.profile = {}
+if "last_analysis" not in st.session_state: st.session_state.last_analysis = None
+
+st.sidebar.title("🤖 Agent Navigation")
+page = st.sidebar.radio("Select Module", [
+    "Home", "Profile Setup", "Stock Analysis", "AI Decision", 
+    "Portfolio Allocation", "Financial Planning", "Education", "Memory Logs"
 ])
 
-# --- HOME PAGE ---
+# --- HOME ---
 if page == "Home":
-    st.title("🤖 AI Investment Analyst Agent")
-    st.image("https://placehold.co/1000x400/png?text=Smart+Investing+Dashboard", caption="Smart Investing for Everyone")
+    st.title("🤖 AI Investment Hive")
+    st.image("https://placehold.co/1000x400/png?text=Multi-Agent+System+Active", caption="Orchestrator Online")
     st.markdown("""
-    ### Welcome to your Advanced Personal Investment Assistant
-    Powered by **Multi-Agent Architecture** & **Pinecone Vector Memory**.
+    ### System Status: **ONLINE 🟢**
     
-    **Capabilities:**
-    * 🧠 **Memory Agent:** Remembers your portfolio history semantically.
-    * 📊 **Analyst Agent:** Performs real-time technical & fundamental analysis.
-    * 💬 **Advisor Agent:** Explains complex data in simple English.
+    This platform uses a **Multi-Agent Architecture**:
+    1.  **Analyst Agent:** Scans markets & calculates indicators.
+    2.  **Planner Agent:** Strategizes based on your risk profile.
+    3.  **Advisor Agent:** Explains logic in plain English.
+    4.  **Memory Agent:** Stores your history in a **Pinecone Vector Database**.
     """)
-    
-    if st.button("🧪 Test System Connection"):
-        with st.spinner("Pinging Agents..."):
-            res = advisor_agent.generate_response("You are a helper.", "Say 'System Online'")
-            st.success(f"✅ {res}")
 
-# --- PROFILE PAGE ---
-elif page == "Profile":
-    st.header("👤 Investor Profile")
-    with st.form("profile_form"):
-        st.session_state.name = st.text_input("Your Name", value=st.session_state.get("name", ""))
-        st.session_state.age = st.number_input("Age", 18, 100, value=st.session_state.get("age", 25))
-        st.session_state.income = st.number_input("Monthly Income (₹)", 0, value=st.session_state.get("income", 50000))
-        st.session_state.savings = st.number_input("Monthly Savings (₹)", 0, value=st.session_state.get("savings", 10000))
-        st.session_state.risk = st.slider("Risk Appetite (1=Safe, 20=Risky)", 1, 20, value=st.session_state.get("risk", 10))
+# --- PROFILE ---
+elif page == "Profile Setup":
+    st.header("👤 Profile Agent")
+    with st.form("profile"):
+        name = st.text_input("Name", value=st.session_state.profile.get("name", "Investor"))
+        risk = st.slider("Risk Appetite", 1, 20, 10)
+        income = st.number_input("Monthly Income", value=50000)
         if st.form_submit_button("Save Profile"):
-            st.session_state.profile_created = True
-            st.success("✅ Profile Saved! Agents updated.")
+            st.session_state.profile = {"name": name, "risk": risk, "income": income}
+            st.success("Profile updated and broadcast to all agents.")
 
-# --- STOCK ANALYSIS PAGE ---
-elif page == "Stock Analysis (Phase 2)":
-    st.header("📊 Stock Analysis")
-    symbol = st.text_input("Enter Stock Symbol (e.g., INFY.NS, RELIANCE.NS, TSLA)")
-    mode = st.selectbox("Mode", ["INVESTOR", "TRADER"])
+# --- STOCK ANALYSIS ---
+elif page == "Stock Analysis":
+    st.header("📊 Analyst Agent Dashboard")
+    symbol = st.text_input("Enter Symbol (e.g., RELIANCE.NS)")
     
-    if st.button("Analyze Stock") and symbol:
-        st.session_state.symbol = symbol
-        period = "5y" if mode == "INVESTOR" else "6mo"
-        interval = "1mo" if mode == "INVESTOR" else "1d"
-        
-        with st.spinner("Analyst Agent is crunching numbers..."):
-            df, results = analyst_agent.analyze_stock(symbol, period, interval)
+    if st.button("Run Analysis Protocol"):
+        with st.status("🔄 Orchestrator: Coordinating Agents...", expanded=True) as status:
             
-            if df is None:
-                st.error("❌ Stock not found.")
-            else:
-                st.session_state.analysis_results = results # Save for Phase 4
-                st.session_state.stock_analyzed = True
+            st.write("1️⃣ **Analyst Agent:** Fetching market data...")
+            data = analyst_node.analyze(symbol)
+            
+            if data:
+                st.session_state.last_analysis = data # Store for other agents
+                st.write("2️⃣ **Analyst Agent:** Calculating RSI, MACD, Trends...")
+                st.write("3️⃣ **Advisor Agent:** Synthesizing report...")
+                status.update(label="✅ Analysis Complete", state="complete")
                 
-                # Visuals
-                st.subheader("🕯️ Price Action & Indicators")
-                fig = go.Figure()
-                fig.add_candlestick(x=df["Date"], open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Price")
-                fig.add_trace(go.Scatter(x=df["Date"], y=df["MA20"], name="MA20", line=dict(color='blue')))
-                fig.add_trace(go.Scatter(x=df["Date"], y=df["MA50"], name="MA50", line=dict(color='orange')))
-                st.plotly_chart(fig, use_container_width=True)
-                
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Trend", results['trend'])
-                c2.metric("RSI", f"{results['rsi']:.2f}")
-                c3.metric("MACD Signal", results['macd_signal'])
-                
-                st.subheader("📉 RSI Indicator")
-                st.line_chart(df.set_index("Date")["RSI"])
-                
+                # UI Display
                 st.divider()
-                st.subheader("🏦 Fundamental Snapshot")
-                f = results['fundamentals']
-                fc1, fc2, fc3, fc4 = st.columns(4)
-                fc1.metric("Sector", f['Sector'])
-                fc2.metric("P/E Ratio", f['PE'])
-                fc3.metric("EPS", f['EPS'])
-                fc4.metric("Market Cap", f"₹{f['MarketCap']}")
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Price", f"₹{data['price']}")
+                c2.metric("Trend", data['trend'])
+                c3.metric("RSI", data['rsi'])
+                st.line_chart(data['history_df']['Close'])
+                
+                # Memory Save
+                mem_text = f"Analyzed {symbol}. Price: {data['price']}. Trend: {data['trend']}."
+                memory_node.memorize(mem_text, {"type": "analysis", "symbol": symbol})
+                st.toast("💾 Saved to Long-Term Memory")
+                
+            else:
+                st.error("Analyst Agent could not find symbol.")
+                status.update(label="❌ Failed", state="error")
 
-# --- AI DECISION PAGE ---
-elif page == "AI Decision (Phase 4)":
-    st.header("🧠 AI Decision Agent")
-    if not st.session_state.get("stock_analyzed"):
-        st.warning("⚠️ Please run Stock Analysis first.")
+# --- AI DECISION ---
+elif page == "AI Decision":
+    st.header("🧠 Decision Agent")
+    if not st.session_state.last_analysis:
+        st.warning("⚠️ Waiting for Analyst Agent data. Go to 'Stock Analysis' first.")
     else:
-        res = st.session_state.analysis_results
+        data = st.session_state.last_analysis
         
-        # Score Logic
+        # Agent Logic
         score = 0
-        reasons = []
-        if res['trend'] == "BULLISH": score+=1; reasons.append("✅ Trend is Bullish (MA20 > MA50)")
-        else: reasons.append("❌ Trend is Bearish")
-        if res['rsi'] > 50: score+=1; reasons.append("✅ RSI indicates momentum (>50)")
-        else: reasons.append("❌ RSI indicates weakness")
-        if res['macd_signal'] == "BULLISH": score+=1; reasons.append("✅ MACD is positive")
-        else: reasons.append("❌ MACD is negative")
+        if data['trend'] == "BULLISH": score += 1
+        if data['rsi'] < 70 and data['rsi'] > 30: score += 1
+        if data['macd'] == "BUY": score += 1
         
-        decision = "BUY" if score >= 2 else "HOLD" if score == 1 else "WAIT/SELL"
-        color = "green" if decision == "BUY" else "orange" if decision == "HOLD" else "red"
+        recommendation = "BUY" if score >= 2 else "HOLD"
         
-        st.markdown(f"<h2 style='color:{color};'>Recommendation: {decision}</h2>", unsafe_allow_html=True)
-        st.write("### Reasoning:")
-        for r in reasons: st.write(r)
+        st.info(f"**Agent Consensus:** {recommendation}")
         
-        st.divider()
-        st.subheader("🤖 Agent Explanation")
-        with st.spinner("Advisor Agent is writing report..."):
-            prompt = f"""
-            Analyze {res['symbol']}. Price: {res['price']}. Trend: {res['trend']}. RSI: {res['rsi']}.
-            Explain simply why the recommendation is {decision}. Max 3 sentences.
-            """
-            explanation = advisor_agent.generate_response("You are a financial expert.", prompt)
-            st.write(explanation)
+        # Explanation from LLM Agent
+        exp = advisor_node.explain(str(data), f"Why is the recommendation {recommendation}?")
+        st.write(f"**Advisor Insight:** {exp}")
 
-# --- PORTFOLIO ALLOCATION PAGE ---
-elif page == "Portfolio Allocation (Phase 3)":
-    st.header("💼 Intelligent Portfolio Manager")
+# --- PORTFOLIO ALLOCATION ---
+elif page == "Portfolio Allocation":
+    st.header("💼 Portfolio Planner Agent")
     
-    if not st.session_state.profile_created:
-        st.warning("⚠️ Create Profile first.")
-        st.stop()
-        
-    # Memory Check (RAG)
-    past_plans = memory_agent.retrieve_memory(st.session_state.name, "portfolio allocation", top_k=1)
+    # 1. RAG MEMORY CHECK
+    st.subheader("🧠 Memory Recall")
+    past_plans = memory_node.recall("portfolio allocation plan", top_k=1)
     if past_plans:
-        st.info(f"📂 **Memory Agent found past plan:** {past_plans[0]['Summary']}")
-    
-    capital = st.number_input("Investment Amount (₹)", 1000, step=500, value=100000)
-    sentiment = analyst_agent.get_market_sentiment()
-    st.write(f"**Market Sentiment:** {sentiment}")
-    
-    # Strategy Logic
-    if sentiment == "BEARISH": rec = {"Equity": 30, "Debt": 50, "Gold": 20}
-    elif sentiment == "BULLISH": rec = {"Equity": 60, "Debt": 30, "Gold": 10}
-    else: rec = {"Equity": 50, "Debt": 30, "Gold": 20}
-    
-    st.subheader("📊 Asset Allocation Strategy")
-    c1, c2, c3 = st.columns(3)
-    eq = c1.number_input("Equity %", value=rec['Equity'])
-    db = c2.number_input("Debt %", value=rec['Debt'])
-    gd = c3.number_input("Gold %", value=rec['Gold'])
-    
-    if eq+db+gd != 100: st.error("Total must be 100%")
+        st.success(f"**I remember your last plan:** {past_plans[0].get('text', 'No text')}")
     else:
-        # Chart
-        fig = go.Figure(data=[go.Pie(labels=["Equity", "Debt", "Gold"], values=[eq, db, gd], hole=.3)])
-        st.plotly_chart(fig, use_container_width=True)
+        st.caption("No prior plans found in vector memory.")
+
+    capital = st.number_input("Investment Amount", value=100000)
+    
+    if st.button("Generate Strategy"):
+        # 2. Check Market
+        sentiment = analyst_node.check_market_sentiment()
+        st.write(f"📉 **Market Context:** {sentiment}")
         
-        st.subheader("🏢 Company Selection")
-        custom = st.checkbox("Choose custom companies")
-        if not custom:
-            companies = {"Equity": "Nifty 50 ETF", "Debt": "Liquid Fund", "Gold": "Gold BeES"}
-            st.json(companies)
-        else:
-            col1, col2, col3 = st.columns(3)
-            e_c = col1.text_input("Equity", "Reliance")
-            d_c = col2.text_input("Debt", "SBI Fund")
-            g_c = col3.text_input("Gold", "SGB")
-            companies = {"Equity": e_c, "Debt": d_c, "Gold": g_c}
-            
-            if st.button("Analyze Custom Plan"):
-                with st.spinner("Advisor Agent checking risks..."):
-                    p = f"User wants to invest in {companies}. Risk level {st.session_state.risk}. Is this safe?"
-                    st.write(advisor_agent.generate_response("Financial Risk Analyst", p))
+        # 3. Planner Logic
+        risk = st.session_state.profile.get("risk", 10)
+        allocation = planner_node.create_allocation(risk, sentiment)
+        
+        # 4. Display
+        df = pd.DataFrame(list(allocation.items()), columns=["Asset", "Pct"])
+        fig = go.Figure(data=[go.Pie(labels=df['Asset'], values=df['Pct'])])
+        st.plotly_chart(fig)
+        
+        # 5. Save to Memory
+        mem_text = f"Portfolio Plan: {allocation} for Capital: {capital}. Market: {sentiment}"
+        memory_node.memorize(mem_text, {"type": "portfolio", "risk": risk})
+        st.success("✅ Plan executed and saved to neural memory.")
 
-        if st.button("💾 Save Portfolio to Memory"):
-            text_record = f"Portfolio: {eq}% Equity ({companies['Equity']}), {db}% Debt, {gd}% Gold. Capital: {capital}. Date: {datetime.date.today()}"
-            meta = {"type": "portfolio", "capital": capital, "equity": eq}
-            success = memory_agent.store_memory(st.session_state.name, text_record, meta)
-            if success: st.success("✅ Saved to Pinecone Vector Database!")
-
-# --- FINANCIAL PLANNING PAGE ---
-elif page == "Financial Planning (Phase 5)":
-    st.header("🔮 SIP Calculator")
-    sip = st.number_input("Monthly SIP (₹)", value=5000)
+# --- FINANCIAL PLANNING ---
+elif page == "Financial Planning":
+    st.header("🔮 Wealth Projection Agent")
+    sip = st.number_input("Monthly SIP", value=5000)
     yrs = st.slider("Years", 1, 30, 10)
-    ret = st.slider("Exp Return %", 5, 20, 12)
+    rate = st.slider("Rate (%)", 5, 20, 12)
     
-    total = sip * 12 * yrs
-    future = sip * (((1+ret/100/12)**(yrs*12)-1)/(ret/100/12))
+    future_val = sip * (((1+rate/100/12)**(yrs*12)-1)/(rate/100/12))
+    st.metric("Future Value", f"₹{future_val:,.0f}")
     
-    c1, c2 = st.columns(2)
-    c1.metric("Invested", f"₹{total:,.0f}")
-    c2.metric("Future Value", f"₹{future:,.0f}")
+    chart_data = [sip * (((1+rate/100/12)**m-1)/(rate/100/12)) for m in range(1, yrs*12+1)]
+    st.area_chart(chart_data)
     
-    vals = [sip * (((1+ret/100/12)**m-1)/(ret/100/12)) for m in range(1, yrs*12+1)]
-    st.area_chart(vals)
-    
-    if st.button("Get AI Advice"):
-        st.write(advisor_agent.generate_response("Financial Planner", f"Explain benefit of SIP of {sip} for {yrs} years at {ret}% return."))
+    if st.button("Get Advisor Opinion"):
+        st.write(advisor_node.explain(f"SIP: {sip}, Years: {yrs}", "Is this a good plan for retirement?"))
 
-# --- EDUCATION PAGE (Chatbot) ---
-elif page == "Education (Phase 6)":
+# --- EDUCATION ---
+elif page == "Education":
     st.header("🎓 Education Agent")
-    
-    # Predefined
-    topic = st.selectbox("Learn Topic:", ["RSI", "MACD", "Candlestick", "SIP"])
-    if st.button("Explain"):
-        st.write(advisor_agent.generate_response("Teacher", f"Explain {topic} simply."))
-        
-    st.divider()
-    st.subheader("💬 Chat with Finance Tutor")
-    
-    # Chat Interface
-    user_input = st.text_input("Ask a follow-up question:")
-    if st.button("Ask"):
-        st.session_state.chat_history.append(f"User: {user_input}")
-        # Send history context to AI
-        context = "\n".join(st.session_state.chat_history[-5:]) # Last 5 messages
-        reply = advisor_agent.generate_response("Tutor", f"History: {context}\nUser asks: {user_input}")
-        st.session_state.chat_history.append(f"AI: {reply}")
-    
-    # Display Chat
-    for msg in st.session_state.chat_history:
-        st.text(msg)
+    q = st.text_input("Ask about finance (e.g., 'What is RSI?')")
+    if st.button("Ask Tutor"):
+        ans = advisor_node.explain("You are a helpful tutor.", q)
+        st.write(ans)
 
-# --- HISTORY PAGE ---
-elif page == "History / Memory (Phase 7)":
-    st.header("📜 Investment Memory (Vector DB)")
-    if not st.session_state.profile_created:
-        st.warning("Login (Profile) to see memory.")
-        st.stop()
-        
-    if st.button("🔄 Load Memory from Pinecone"):
-        history = memory_agent.retrieve_memory(st.session_state.name, "portfolio analysis investment", top_k=10)
-        if history:
-            df = pd.DataFrame(history)
-            st.dataframe(df, use_container_width=True)
+# --- HISTORY ---
+elif page == "History / Memory":
+    st.header("📜 Vector Database Logs")
+    if st.button("Load Memories from Pinecone"):
+        # Fetch generic recent memories
+        mems = memory_node.recall("portfolio analysis stock", top_k=10)
+        if mems:
+            for m in mems:
+                st.info(f"📅 **Memory:** {m.get('text')}")
         else:
-            st.info("No memories found in Pinecone.")
+            st.warning("Pinecone Index appears empty. Save some portfolios first!")
 
 st.sidebar.divider()
-st.sidebar.caption(f"System: Multi-Agent RAG | Model: {MODEL_VERSION}")
+st.sidebar.caption("System: Multi-Agent RAG v2.0")
