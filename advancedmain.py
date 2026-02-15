@@ -51,13 +51,14 @@ def extract_text_from_pdf(uploaded_file):
     return None
 
 # =========================
-# 3. ADVANCED AGENT CLASSES
+# 3. AGENT CLASSES
 # =========================
 
 class MemoryAgent:
     def __init__(self, api_key):
         self.pc = Pinecone(api_key=api_key)
         self.index_name = "financial-memory"
+        # Auto-heal index
         if self.index_name not in [i.name for i in self.pc.list_indexes()]:
             try:
                 self.pc.create_index(
@@ -123,9 +124,11 @@ class AnalystAgent:
             else:
                 trend = "BEARISH"
                 signals.append("❌ Price is below 50-Day MA (Short-term Bearish).")
-                
-            if ma50 > ma200:
-                signals.append("✅ Golden Cross active (50 MA > 200 MA).")
+            
+            # Golden Cross Logic (Safe Check)
+            if pd.notna(ma200):
+                if ma50 > ma200:
+                    signals.append("✅ Golden Cross active (50 MA > 200 MA).")
             
             # Momentum Logic
             if rsi < 30:
@@ -149,7 +152,9 @@ class AnalystAgent:
                 "reasoning": reasoning,
                 "history_df": df
             }
-        except: return None
+        except Exception as e: 
+            print(e)
+            return None
 
     def get_sentiment(self):
         try:
@@ -226,7 +231,7 @@ with tab1:
             st.session_state.profile_created = True
             st.success("Identity Verified.")
 
-# === TAB 2: MARKET ANALYST (IMPROVED) ===
+# === TAB 2: MARKET ANALYST ===
 with tab2:
     if not st.session_state.profile_created:
         st.warning("Please complete Profile first.")
@@ -239,10 +244,11 @@ with tab2:
             sym = st.text_input("Stock Symbol", "RELIANCE.NS")
             if st.button("Run Deep Analysis"):
                 with st.spinner("Analyst Agent working..."):
+                    # CLEAR OLD DATA TO PREVENT KEYERROR
+                    st.session_state.analysis = None 
                     data = analyst.analyze(sym)
                     if data:
                         st.session_state.analysis = data
-                        # Only save simplified verdict to memory to avoid overhead
                         memory.memorize(f"Analyzed {sym}. Verdict: {data.get('verdict','N/A')}", {"type": "analysis"})
                     else: st.error("Symbol not found")
         
@@ -257,29 +263,33 @@ with tab2:
                 m2.metric("RSI (Momentum)", d['rsi'])
                 m3.metric("Trend", d['trend'])
                 
-                # Safe access to 'verdict' using .get() to prevent KeyError
-                verdict = d.get('verdict', 'HOLD') 
+                # Safe Verdict
+                verdict = d.get('verdict', 'HOLD')
                 v_color = "green" if "BUY" in verdict else "red"
                 m4.markdown(f"**Verdict:** :{v_color}[{verdict}]")
                 
-                # 2. Reasoning Box (Safe access)
-                reasoning = d.get('reasoning', 'Analysis complete. Check charts for details.')
+                # 2. Reasoning Box
+                reasoning = d.get('reasoning', 'Analysis complete.')
                 st.info(f"**💡 Analyst Reasoning:** {reasoning}")
 
                 # 3. Advanced Charts (Plotly)
                 tab_chart1, tab_chart2 = st.tabs(["🕯️ Technical Chart", "📉 Momentum (RSI)"])
                 
                 with tab_chart1:
-                    # Candlestick + MA
+                    # Candlestick + MA (Safe Check)
                     fig = go.Figure()
                     fig.add_trace(go.Candlestick(x=d['history_df'].index,
                                     open=d['history_df']['Open'], high=d['history_df']['High'],
                                     low=d['history_df']['Low'], close=d['history_df']['Close'], name='Price'))
                     
-                    fig.add_trace(go.Scatter(x=d['history_df'].index, y=d['history_df']['MA50'], 
-                                             line=dict(color='blue', width=1), name='50 Day MA'))
-                    fig.add_trace(go.Scatter(x=d['history_df'].index, y=d['history_df']['MA200'], 
-                                             line=dict(color='orange', width=1), name='200 Day MA'))
+                    # SAFEGUARD: Only plot MA200 if it exists in columns
+                    if 'MA50' in d['history_df'].columns:
+                        fig.add_trace(go.Scatter(x=d['history_df'].index, y=d['history_df']['MA50'], 
+                                                 line=dict(color='blue', width=1), name='50 Day MA'))
+                    
+                    if 'MA200' in d['history_df'].columns:
+                        fig.add_trace(go.Scatter(x=d['history_df'].index, y=d['history_df']['MA200'], 
+                                                 line=dict(color='orange', width=1), name='200 Day MA'))
                     
                     fig.update_layout(height=400, margin=dict(l=0, r=0, t=0, b=0))
                     st.plotly_chart(fig, use_container_width=True)
@@ -289,7 +299,6 @@ with tab2:
                     fig_rsi = go.Figure()
                     fig_rsi.add_trace(go.Scatter(x=d['history_df'].index, y=d['history_df']['RSI'], 
                                                  line=dict(color='purple', width=2), name='RSI'))
-                    # Overbought/Oversold lines
                     fig_rsi.add_hline(y=70, line_dash="dash", line_color="red")
                     fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
                     fig_rsi.update_layout(height=300, margin=dict(l=0, r=0, t=0, b=0))
@@ -305,62 +314,4 @@ with tab3:
         if st.button("Generate Allocation"):
             sent = analyst.get_sentiment()
             risk = st.session_state.profile['risk']
-            alloc = planner.create_allocation(risk, sent)
-            st.session_state.portfolio = {"alloc": alloc, "cap": cap, "sent": sent}
-        
-        if st.session_state.portfolio:
-            p = st.session_state.portfolio
-            c1, c2 = st.columns(2)
-            with c1: st.json(p['alloc'])
-            with c2: 
-                fig = go.Figure(data=[go.Pie(labels=list(p['alloc'].keys()), values=list(p['alloc'].values()))])
-                st.plotly_chart(fig, use_container_width=True)
-
-# === TAB 4: AI LAB ===
-with tab4:
-    st.subheader("💬 AI Lab (Multi-Modal)")
-    ctx = ""
-    if st.session_state.profile: ctx += f"User: {st.session_state.profile['name']}. "
-    if st.session_state.analysis: ctx += f"Stock: {st.session_state.analysis['symbol']}. "
-    
-    with st.expander("📂 Data Upload", expanded=True):
-        uc1, uc2 = st.columns(2)
-        with uc1:
-            img_file = st.file_uploader("Upload Chart", type=['png', 'jpg'])
-            img_b64 = encode_image(img_file) if img_file else None
-        with uc2:
-            pdf_file = st.file_uploader("Upload Report", type=['pdf'])
-            pdf_txt = extract_text_from_pdf(pdf_file) if pdf_file else None
-            if pdf_txt: st.success("PDF Extracted!")
-
-    chat_container = st.container(height=400)
-    for msg in st.session_state.chat_history:
-        with chat_container.chat_message(msg["role"]):
-            st.write(msg["content"])
-
-    user_q = st.chat_input("Ask FinBot...")
-    if user_q:
-        st.session_state.chat_history.append({"role": "user", "content": user_q})
-        with chat_container.chat_message("user"): st.write(user_q)
-        
-        with chat_container.chat_message("assistant"):
-            with st.spinner("Processing..."):
-                reply = tutor.chat(user_q, st.session_state.chat_history, img_b64, pdf_txt, ctx)
-                st.write(reply)
-        st.session_state.chat_history.append({"role": "assistant", "content": reply})
-
-# === TAB 5: DASHBOARD ===
-with tab5:
-    st.subheader("🏁 Mission Control")
-    if st.session_state.profile:
-        c1, c2, c3 = st.columns(3)
-        c1.metric("User", st.session_state.profile['name'])
-        c2.metric("Last Asset", st.session_state.analysis['symbol'] if st.session_state.analysis else "None")
-        c3.metric("Plan Value", f"₹{st.session_state.portfolio['cap']}" if st.session_state.portfolio else "0")
-        
-        st.divider()
-        if st.button("Sync Memory"):
-            logs = memory.recall("investment", 5)
-            for l in logs: st.info(l)
-    else:
-        st.info("System Idle.")
+            alloc =
