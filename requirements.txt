@@ -14,3 +14,5 @@ pinecone-client
 langgraph
 langchain
 pydantic
+pinecone
+pypdf
