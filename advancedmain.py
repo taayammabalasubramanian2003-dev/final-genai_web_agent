@@ -3,7 +3,6 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
 import os
@@ -243,7 +242,8 @@ with tab2:
                     data = analyst.analyze(sym)
                     if data:
                         st.session_state.analysis = data
-                        memory.memorize(f"Analyzed {sym}. Verdict: {data['verdict']}", {"type": "analysis"})
+                        # Only save simplified verdict to memory to avoid overhead
+                        memory.memorize(f"Analyzed {sym}. Verdict: {data.get('verdict','N/A')}", {"type": "analysis"})
                     else: st.error("Symbol not found")
         
         # Results Display
@@ -257,12 +257,14 @@ with tab2:
                 m2.metric("RSI (Momentum)", d['rsi'])
                 m3.metric("Trend", d['trend'])
                 
-                # Verdict Color
-                v_color = "green" if "BUY" in d['verdict'] else "red"
-                m4.markdown(f"**Verdict:** :{v_color}[{d['verdict']}]")
+                # Safe access to 'verdict' using .get() to prevent KeyError
+                verdict = d.get('verdict', 'HOLD') 
+                v_color = "green" if "BUY" in verdict else "red"
+                m4.markdown(f"**Verdict:** :{v_color}[{verdict}]")
                 
-                # 2. Reasoning Box
-                st.info(f"**💡 Analyst Reasoning:** {d['reasoning']}")
+                # 2. Reasoning Box (Safe access)
+                reasoning = d.get('reasoning', 'Analysis complete. Check charts for details.')
+                st.info(f"**💡 Analyst Reasoning:** {reasoning}")
 
                 # 3. Advanced Charts (Plotly)
                 tab_chart1, tab_chart2 = st.tabs(["🕯️ Technical Chart", "📉 Momentum (RSI)"])
