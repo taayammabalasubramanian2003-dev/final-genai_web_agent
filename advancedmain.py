@@ -28,7 +28,6 @@ if not api_key:
     st.stop()
 
 client = OpenAI(api_key=api_key)
-# Using GPT-4o-mini as it supports Vision and is cost-effective
 MODEL_VERSION = "gpt-4o-mini" 
 
 # =========================
@@ -53,7 +52,8 @@ class MemoryAgent:
         self.index_name = "financial-memory"
         
         # Auto-create Index logic
-        if self.index_name not in [i.name for i in self.pc.list_indexes()]:
+        existing_indexes = [i.name for i in self.pc.list_indexes()]
+        if self.index_name not in existing_indexes:
             try:
                 self.pc.create_index(
                     name=self.index_name,
@@ -63,7 +63,7 @@ class MemoryAgent:
                 )
                 time.sleep(5) # Wait for init
             except Exception as e:
-                pass # Index might already exist or error handled elsewhere
+                pass 
         
         self.index = self.pc.Index(self.index_name)
 
@@ -201,9 +201,9 @@ chat_node = ConversationalAgent()
 # 4. FRONTEND ORCHESTRATOR
 # =========================
 
-# Session State
+# Initialize Session State Variables Safely
 if "chat_history" not in st.session_state: st.session_state.chat_history = []
-if "profile" not in st.session_state: st.session_state.profile = {}
+if "profile" not in st.session_state: st.session_state.profile = {"name": "Investor", "risk": 10}
 if "last_analysis" not in st.session_state: st.session_state.last_analysis = None
 
 st.sidebar.title("🤖 Agent Navigation")
@@ -222,14 +222,21 @@ if page == "Home":
 # --- PROFILE ---
 elif page == "Profile Setup":
     st.header("👤 Profile Agent")
-    with st.form("profile"):
-        name = st.text_input("Name", value=st.session_state.profile.get("name", "Investor"))
-        risk = st.slider("Risk Appetite", 1, 20, 10)
-        income = st.number_input("Monthly Income", value=50000)
-        savings = st.number_input("Monthly Savings", value=10000)
+    with st.form("profile_form"):
+        name_input = st.text_input("Name", value=st.session_state.profile.get("name", "Investor"))
+        risk_input = st.slider("Risk Appetite", 1, 20, st.session_state.profile.get("risk", 10))
+        income_input = st.number_input("Monthly Income", value=st.session_state.profile.get("income", 50000))
+        savings_input = st.number_input("Monthly Savings", value=st.session_state.profile.get("savings", 10000))
+        
         if st.form_submit_button("Save Profile"):
-            st.session_state.profile = {"name": name, "risk": risk, "income": income, "savings": savings}
-            st.success("Profile updated.")
+            # Update session state with new values
+            st.session_state.profile = {
+                "name": name_input, 
+                "risk": risk_input, 
+                "income": income_input, 
+                "savings": savings_input
+            }
+            st.success("Profile updated successfully.")
 
 # --- STOCK ANALYSIS ---
 elif page == "Stock Analysis":
