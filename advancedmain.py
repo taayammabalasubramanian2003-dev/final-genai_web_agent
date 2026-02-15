@@ -392,20 +392,73 @@ with tab5:
         st.session_state.chat_history.append({"role": "assistant", "content": reply})
 
 # === TAB 6: ACTIVITY DASHBOARD (TIMELINE) ===
-with tab6:
-    st.subheader("🏁 Session Timeline")
+# with tab6:
+  #  st.subheader("🏁 Session Timeline")
     
     # 1. Profile Summary
-    if st.session_state.profile:
-        with st.container(border=True):
-            st.markdown("### 👤 User Identity")
-            p = st.session_state.profile
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Name", p['name'])
-            c2.metric("Risk Score", f"{p['risk']}/20")
-            c3.metric("Mode", p['mode'])
+   # if st.session_state.profile:
+    #    with st.container(border=True):
+     #       st.markdown("### 👤 User Identity")
+      #      p = st.session_state.profile
+       #c1, c2, c3 = st.columns(3)
+        #    c1.metric("Name", p['name'])
+         #   c2.metric("Risk Score", f"{p['risk']}/20")
+          #  c3.metric("Mode", p['mode'])
 
-    st.divider()
+    #st.divider()
+    # === TAB 6: DASHBOARD ===
+with tab6:
+    st.subheader("🏁 Master Dashboard")
+    
+    if st.session_state.profile:
+        # ROW 1: PROFILE
+        with st.container(border=True):
+            st.markdown("### 👤 User Profile")
+            p = st.session_state.profile
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Name", p.get('name'))
+            c2.metric("Age", p.get('age'))
+            c3.metric("Mode", p.get('mode'))
+            c4.metric("Risk Score", f"{p.get('risk')}/20")
+
+        # ROW 2: MARKET DATA
+        if st.session_state.analysis:
+            with st.container(border=True):
+                st.markdown("### 📉 Market Analysis")
+                d = st.session_state.analysis
+                k1, k2, k3, k4, k5 = st.columns(5)
+                k1.metric("Stock", d.get('symbol'))
+                k2.metric("Price", f"₹{d.get('price')}")
+                k3.metric("RSI", d.get('rsi'))
+                k4.metric("MACD", d.get('macd', 'N/A'))
+                
+                verd = d.get('verdict', 'N/A')
+                color = "green" if verd == "BUY" else "red"
+                k5.markdown(f"*Rec:* :{color}[{verd}]")
+        
+        # ROW 3: STRATEGY
+        c_left, c_right = st.columns(2)
+        with c_left:
+            with st.container(border=True):
+                st.markdown("### 💼 Portfolio Strategy")
+                if st.session_state.portfolio:
+                    plan = st.session_state.portfolio
+                    st.write(f"*Capital:* ₹{plan['cap']}")
+                    st.json(plan['alloc'])
+                else: st.caption("No portfolio generated.")
+
+        with c_right:
+            with st.container(border=True):
+                st.markdown("### 🔮 SIP Wealth Plan")
+                if st.session_state.sip_plan:
+                    sip = st.session_state.sip_plan
+                    st.metric("Monthly Investment", f"₹{sip['amount']}")
+                    st.metric("Duration", f"{sip['years']} Years")
+                    st.metric("Projected Value", f"₹{sip['future_val']:,.0f}")
+                else: st.caption("No SIP plan saved.")
+            
+    else:
+        st.info("Start at Tab 1 to populate the Dashboard.")
     
     # 2. Activity Log (Timeline)
     st.markdown("### 📜 Activity History (Use 1, Use 2...)")
