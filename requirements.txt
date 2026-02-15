@@ -8,4 +8,5 @@ pinecone
 langchain
 langchain-community
 langchain-openai
+pinecone>=3.0.0
 python-dotenv
